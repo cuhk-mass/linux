@@ -28,6 +28,9 @@
 #include <linux/ksm.h>
 #include <linux/uaccess.h>
 #include <linux/mm_inline.h>
+#include <linux/page_balancing.h>
+#include <linux/sched/sysctl.h>
+
 #include <asm/pgtable.h>
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
@@ -43,6 +46,8 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 	spinlock_t *ptl;
 	unsigned long pages = 0;
 	int target_node = NUMA_NO_NODE;
+	LIST_HEAD(coldpages);
+	int mode = sysctl_numa_balancing_extended_mode;
 
 	/*
 	 * Can be called with only the mmap_sem for reading by
@@ -72,6 +77,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		if (pte_present(oldpte)) {
 			pte_t ptent;
 			bool preserve_write = prot_numa && pte_write(oldpte);
+			int prev_lv;
 
 			/*
 			 * Avoid trapping faults against the zero or KSM
@@ -79,6 +85,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			 */
 			if (prot_numa) {
 				struct page *page;
+				int nid;
 
 				page = vm_normal_page(vma, addr, oldpte);
 				if (!page || PageKsm(page))
@@ -97,15 +104,29 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				if (page_is_file_cache(page) && PageDirty(page))
 					continue;
 
+				nid = page_to_nid(page);
+
 				/* Avoid TLB flush if possible */
-				if (pte_protnone(oldpte))
+				if (pte_protnone(oldpte)) {
+					if (mode & NUMA_BALANCING_OPM) {
+						/* The page is not accessed in last scan period */
+						prev_lv = mod_page_access_lv(page, 0);
+						add_page_for_tracking(page, prev_lv);
+					}
 					continue;
+				}
+
+				/* The page is accessed in last scan period */
+				if (mode & NUMA_BALANCING_OPM) {
+					prev_lv = mod_page_access_lv(page, 1);
+					add_page_for_tracking(page, prev_lv);
+				}
 
 				/*
 				 * Don't mess with PTEs if page is already on the node
 				 * a single-threaded process is running on.
 				 */
-				if (target_node == page_to_nid(page))
+				if (target_node == nid)
 					continue;
 			}
 
@@ -122,6 +143,8 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			}
 			ptep_modify_prot_commit(vma, addr, pte, oldpte, ptent);
 			pages++;
+
+
 		} else if (IS_ENABLED(CONFIG_MIGRATION)) {
 			swp_entry_t entry = pte_to_swp_entry(oldpte);
 

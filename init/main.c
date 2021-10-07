@@ -1188,6 +1188,7 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 	/* Initialize page ext after all struct pages are initialized. */
 	page_ext_init();
+	promote_init();
 
 	do_basic_setup();
 

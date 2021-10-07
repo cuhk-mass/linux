@@ -68,12 +68,35 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
+#include <linux/page_balancing.h>
+#include <linux/sched/sysctl.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
+
+//#define DEBUG
+
+#ifdef CONFIG_PAGE_BALANCING
+#define MAX_NR_FREE_PAGES 16
+#define MIN_NR_FREE_PAGES (MAX_NR_FREE_PAGES >> 2) // 25%
+
+#define MAX_NR_FREE_HPAGES 4
+#define MIN_NR_FREE_HPAGES 3
+//#define MIN_NR_FREE_HPAGES (MAX_NR_FREE_HPAGES >> 2) // 25%
+struct free_promote_area *promote_area[2];
+
+struct task_struct **page_demoted;
+struct mem_cgroup **kdemoted_memcg;
+wait_queue_head_t *kdemoted_wait;
+int *kdemoted_wakeup;
+spinlock_t *promote_lock;
+
+void add_page_for_promotion(struct page *page, struct free_promote_area *area);
+void free_promote_page(struct page* page);
+#endif
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -670,7 +693,34 @@ out:
 
 void free_compound_page(struct page *page)
 {
-	__free_pages_ok(page, compound_order(page));
+	if (PageDemoted(page) && PageTransHuge(page)) {
+		struct page *newpage;
+		int cpu = get_page_last_cpu(page);
+		enum page_type type = HUGEPAGE;
+
+		count_vm_event(PGFREE_DEMOTED);
+		ClearPageDemoted(page);
+
+		__free_pages_ok(page, compound_order(page));
+
+		/*
+		 * FIXME free page must be added to free promote page pool
+		 * witout new page allocation.
+		 */
+		newpage = __alloc_pages_nodemask(GFP_TRANSHUGE_LIGHT | __GFP_THISNODE,
+				HPAGE_PMD_ORDER, cpu_to_node(cpu), NULL);
+		if (newpage) {
+			prep_transhuge_page(newpage);
+			spin_lock_irq(&promote_lock[cpu]);
+			add_page_for_promotion(newpage, &promote_area[type][cpu]);
+			spin_unlock_irq(&promote_lock[cpu]);
+		} else {
+			printk(KERN_ERR "failed to alloc page\n");
+			return;
+		}
+	} else
+		__free_pages_ok(page, compound_order(page));
+
 }
 
 void prep_compound_page(struct page *page, unsigned int order)
@@ -1167,6 +1217,8 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	page_cpupid_reset_last(page);
 	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
 	reset_page_owner(page, order);
+
+	clear_page_info(page);
 
 	if (!PageHighMem(page)) {
 		debug_check_no_locks_freed(page_address(page),
@@ -3056,6 +3108,13 @@ void free_unref_page(struct page *page)
 	if (!free_unref_page_prepare(page, pfn))
 		return;
 
+	if (PageDemoted(page)) {
+		free_promote_page(page);
+		count_vm_event(PGFREE_DEMOTED);
+		ClearPageDemoted(page);
+		return;
+	}
+
 	local_irq_save(flags);
 	free_unref_page_commit(page, pfn);
 	local_irq_restore(flags);
@@ -4739,6 +4798,9 @@ out:
 		__free_pages(page, order);
 		page = NULL;
 	}
+
+	if (page != NULL)
+		reset_page_access_lv(page);
 
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
 
@@ -6668,6 +6730,7 @@ static void __meminit pgdat_init_internals(struct pglist_data *pgdat)
 	pgdat_page_ext_init(pgdat);
 	spin_lock_init(&pgdat->lru_lock);
 	lruvec_init(node_lruvec(pgdat));
+	deferred_list_init(pgdat);
 }
 
 static void __meminit zone_init_internals(struct zone *zone, enum zone_type idx, int nid,
@@ -8275,6 +8338,8 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 	migrate_prep();
 
 	while (pfn < end || !list_empty(&cc->migratepages)) {
+		struct migrate_detail m_detail = {};
+
 		if (fatal_signal_pending(current)) {
 			ret = -EINTR;
 			break;
@@ -8297,8 +8362,9 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 							&cc->migratepages);
 		cc->nr_migratepages -= nr_reclaimed;
 
+		m_detail.reason = MR_CONTIG_RANGE;
 		ret = migrate_pages(&cc->migratepages, alloc_migrate_target,
-				    NULL, 0, cc->mode, MR_CONTIG_RANGE);
+				    NULL, 0, cc->mode, &m_detail);
 	}
 	if (ret < 0) {
 		putback_movable_pages(&cc->migratepages);
@@ -8616,5 +8682,554 @@ bool set_hwpoison_free_buddy_page(struct page *page)
 	spin_unlock_irqrestore(&zone->lock, flags);
 
 	return hwpoisoned;
+}
+#endif
+
+#ifdef CONFIG_PAGE_BALANCING
+
+void deferred_list_init(struct pglist_data *pgdat)
+{
+	int lv;
+
+	INIT_LIST_HEAD(&pgdat->deferred_list);
+	for (lv = 0; lv <= MAX_ACCESS_LEVEL; lv++) {
+		INIT_LIST_HEAD(&pgdat->lap_area[lv].lap_list);
+		pgdat->lap_area[lv].nr_free = 0;
+		pgdat->lap_area[lv].demotion_count = 0;
+	}
+}
+
+struct page* alloc_promote_page(struct page *page, unsigned long data) {
+	struct page_info *pi;
+	struct page *newpage;
+	int cpu = (int) data;
+	int nid = cpu_to_node(cpu);
+	struct pglist_data *pgdat = NODE_DATA(nid);
+	enum page_type type;
+
+	/*
+	 * 1) Find the free list in node and cpu number
+	 * 2) Delete a page from the free list if it is not empty
+	 * 3) Return the page
+	 */
+
+	type = PageTransHuge(page);
+
+	spin_lock_irq(&promote_lock[cpu]);
+	if (list_empty(&promote_area[type][cpu].free_list)) {
+#ifdef DEBUG
+		printk(KERN_ERR "Failed to alloc page(node[%d], cpu[%d])\n",
+				nid, cpu);
+#endif
+		count_vm_event(PGPROMOTE_EMPTY_POOL_FAIL);
+		goto out_unlock;
+	}
+
+	pi = list_first_entry_or_null(&promote_area[type][cpu].free_list, struct page_info, list);
+	if (pi == NULL)
+		goto out_unlock;
+
+	newpage = get_page_from_page_info(pi);
+	if (newpage == NULL) {
+		printk("alloc_promote_page: cannot get a free page! \n");
+		count_vm_event(PGPROMOTE_NO_PAGE_FAIL);
+		goto out_unlock;
+	}
+
+	list_del(&pi->list);
+	(promote_area[type][cpu].nr_free)--;
+
+	spin_unlock_irq(&promote_lock[cpu]);
+
+	mod_node_page_state(pgdat, NR_FREE_PROMOTE, -hpage_nr_pages(newpage));
+
+#ifdef DEBUG
+	printk(KERN_INFO "page is allocated from [cpu%d],[nr_free:%d] pool\n",
+			cpu, promote_area[type][cpu].nr_free);
+#endif
+	count_vm_event(PGPROMOTE_FREE_AREA);
+
+	return newpage;
+
+out_unlock:
+	spin_unlock_irq(&promote_lock[cpu]);
+	return NULL;
+}
+EXPORT_SYMBOL(alloc_promote_page);
+
+struct page *alloc_demote_page(struct page *page, unsigned long data)
+{
+	int dst_nid;
+	struct page *newpage;
+	gfp_t mask = (GFP_HIGHUSER_MOVABLE |
+			__GFP_THISNODE | __GFP_NOMEMALLOC |
+			__GFP_NORETRY | __GFP_NOWARN) &
+			~__GFP_RECLAIM;
+	int order = 0;
+
+	dst_nid = find_best_demotion_node(page);
+
+	/* No memory */
+	if (dst_nid == NUMA_NO_NODE)
+		return NULL;
+
+	if (PageTransHuge(page)) {
+		mask |= GFP_TRANSHUGE_LIGHT;
+		order = HPAGE_PMD_ORDER;
+	}
+
+	newpage = __alloc_pages_node(dst_nid, mask, order);
+
+	if (!newpage)
+		return NULL;
+
+	if (PageTransHuge(page))
+		prep_transhuge_page(newpage);
+
+	if (background_demotion) {
+		int cur_cpu = data;
+		/* Set page pool(per cpu) number */
+		set_page_last_cpu(page, cur_cpu);
+		SetPageDemoted(page);
+	}
+
+	return newpage;
+}
+EXPORT_SYMBOL(alloc_demote_page);
+
+void add_page_for_promotion(struct page *page, struct free_promote_area *area)
+{
+	struct page_info *pi;
+	struct pglist_data *pgdat = page_pgdat(page);
+
+	pi = get_page_info_from_page(page);
+	if (!pi)
+		return;
+	list_add(&pi->list, &area->free_list);
+	pi->pfn = page_to_pfn(page);
+	(area->nr_free)++;
+	mod_node_page_state(pgdat, NR_FREE_PROMOTE, hpage_nr_pages(page));
+}
+EXPORT_SYMBOL(add_page_for_promotion);
+
+void free_promote_page(struct page* page)
+{
+	int cpu = get_page_last_cpu(page);
+	enum page_type type = PageTransHuge(page);
+
+	spin_lock_irq(&promote_lock[cpu]);
+	page_ref_inc(page);
+	add_page_for_promotion(page, &promote_area[type][cpu]);
+	spin_unlock_irq(&promote_lock[cpu]);
+
+#ifdef DEBUG
+	printk("page is released to the promote pool[%d]\n", cpu);
+#endif
+}
+EXPORT_SYMBOL(free_promote_page);
+
+
+int __kdemoted(int nid, int cpu, int nr_to_demote, enum page_type type)
+{
+	struct page_info *pi, *pi2;
+	struct page *page = NULL;
+	struct page_ext *page_ext;
+	struct migrate_detail m_detail = {
+		.reason = MR_DEMOTION,
+		.h_reason = MR_HMEM_DEMOTE,
+	};
+	struct pglist_data *pgdat = NODE_DATA(nid);
+	struct lruvec *lruvec = NULL;
+	int nr_remaining;
+	int lv;
+	int nr_taken = 0;
+	int nr_pages;
+#ifdef CONFIG_PAGE_FAULT_PROFILE
+	u64 start_ts, end_ts;
+	int dst_nid = NUMA_NO_NODE;
+#endif
+
+	LIST_HEAD(coldpages);
+
+	if (nr_to_demote <= 0)
+		return false;
+
+#ifdef CONFIG_PAGE_FAULT_PROFILE
+	start_ts = rdtsc();
+#endif
+	/* 1. Try to demote page cache (active & inactive file page) */
+	if (kdemoted_memcg[cpu] != NULL) {
+		lruvec = mem_cgroup_lruvec(pgdat, kdemoted_memcg[cpu]);
+
+		if (type == BASEPAGE) {
+			if(try_demote_page_cache(pgdat, lruvec))
+				return true;
+		} else { /* until THP size */
+			int nr_pages = nr_to_demote << HPAGE_PMD_ORDER;
+			int p;
+			for (p = 0; p < nr_pages; p ++) {
+				if(!try_demote_page_cache(pgdat, lruvec))
+					break;
+			}
+
+			if (p == nr_pages)
+				return true;
+		}
+	}
+
+	spin_lock_irq(&pgdat->lru_lock);
+
+	/* 2. Get anon cold page */
+	for (lv = 0; lv < MAX_ACCESS_LEVEL; lv++) {
+
+		if (nr_taken >= nr_to_demote)
+			break;
+
+		if (list_empty(&pgdat->lap_area[lv].lap_list))
+			continue;
+
+		list_for_each_entry_safe(pi, pi2, &pgdat->lap_area[lv].lap_list, list) {
+			page = get_page_from_page_info(pi);
+			if (!page) {
+				count_vm_event(PGDEMOTE_NO_PAGE_FAIL);
+				trace_printk("kdemoted: pfn:%lu,last_cpu:%d\n",
+						pi->pfn, pi->last_cpu);
+				page_ext = get_page_ext(pi);
+				clear_bit(PAGE_EXT_TRACKED, &page_ext->flags);
+				clear_bit(PAGE_EXT_BUSY_LOCK, &page_ext->flags);
+				__mod_node_page_state(pgdat, NR_TRACKED, -1);
+				list_del(&pi->list);
+				continue;
+			}
+
+			if (PageTransHuge(page) != type)
+				continue;
+
+			nr_pages = 1;
+
+			if (unlikely(!PageLRU(page))) {
+				count_vm_event(PGDEMOTE_NO_LRU_FAIL);
+				del_page_from_lap_list(page);
+				continue;
+			}
+
+			if (type == BASEPAGE) {
+				if (unlikely(page_count(page) > 1)) {
+					del_page_from_lap_list(page);
+					continue;
+				}
+			}
+
+			if (unlikely(!trylock_busy(page))) {
+				count_vm_event(PGDEMOTE_BUSY_FAIL);
+				continue;
+			}
+			/* page is locked by busy_lock */
+
+			switch (__isolate_lru_page(page, 0)) { //get_page()
+				case 0:
+
+#ifdef CONFIG_PAGE_FAULT_PROFILE
+					dst_nid = next_demotion_node(page_to_nid(page));
+#endif
+					del_page_from_lap_list(page);
+					(pgdat->lap_area[lv].demotion_count)++;
+
+					nr_taken += nr_pages;
+
+					list_move(&page->lru, &coldpages);
+
+					lruvec = mem_cgroup_page_lruvec(page, pgdat);
+					update_lru_size(lruvec, page_lru(page), page_zonenum(page),
+							-hpage_nr_pages(page));
+					unlock_busy(page);
+					/* page is unlocked for busy_lock */
+					break;
+				case -EINVAL:
+				case -EBUSY:
+					del_page_from_lap_list(page);
+					continue;
+				default:
+					BUG();
+			}
+
+			if (nr_taken >= nr_to_demote)
+				break;
+		}
+	}
+	spin_unlock_irq(&pgdat->lru_lock);
+
+	if (!nr_taken)
+		return false;
+
+	nr_remaining = migrate_pages(&coldpages, alloc_demote_page,
+			NULL, cpu, MIGRATE_SYNC, &m_detail);
+
+	if (nr_remaining) {
+		putback_movable_pages(&coldpages);
+		return false;
+	}
+
+	count_vm_events(PGDEMOTE_BACKGROUND, nr_taken - nr_remaining);
+#ifdef CONFIG_PAGE_FAULT_PROFILE
+	end_ts = rdtsc();
+	trace_printk("demotion %d %d %llu %d\n", nid, dst_nid, end_ts - start_ts,
+		     nr_to_demote);
+#endif
+
+	return true;
+}
+
+int wakeup_kdemoted(int cpu, struct page *page)
+{
+	int nr_free, i;
+	int bt_lv = 0;
+	int nid = cpu_to_node(cpu);
+	int lv = get_page_access_lv(page);
+	struct pglist_data *pgdat = NODE_DATA(nid);
+	enum page_type type = PageTransHuge(page);
+	int thp_enabled = transparent_hugepage_flags & (1 << TRANSPARENT_HUGEPAGE_FLAG);
+
+	/* If THP is enabled, only allow for THP pages to proactively promote */
+	if (thp_enabled && (type == BASEPAGE))
+		return 0;
+
+	for (i = 0; list_empty(&pgdat->lap_area[i].lap_list) && (i <= MAX_ACCESS_LEVEL); i++)
+		bt_lv++;
+
+	if (lv <= bt_lv) {
+		count_vm_event(PGPROMOTE_LOW_FREQ_FAIL);
+		return 0;
+	}
+
+	nr_free = promote_area[type][cpu].nr_free;
+
+	if (type == BASEPAGE) {
+		if (nr_free > MIN_NR_FREE_PAGES)
+			return 1;
+	} else if (type == HUGEPAGE) {
+		if (nr_free > MIN_NR_FREE_HPAGES)
+			return 1;
+	}
+
+	/* kdemoted is busy */
+	if (!waitqueue_active(&kdemoted_wait[cpu])) {
+		return 0;
+	}
+
+	kdemoted_wakeup[cpu] = 1;
+	kdemoted_memcg[cpu] = get_mem_cgroup_from_page(page);
+
+	wake_up_interruptible(&kdemoted_wait[cpu]);
+	return 0;
+}
+EXPORT_SYMBOL(wakeup_kdemoted);
+
+static int kdemoted_wait_event(int cpu)
+{
+	int mode = sysctl_numa_balancing_extended_mode;
+
+	return (mode & NUMA_BALANCING_OPM) && kdemoted_wakeup[cpu];
+}
+
+int kdemoted(void *p)
+{
+	int *ptr_cpu = (int *)p;
+	int cpu = *ptr_cpu;
+	int nid = cpu_to_node(cpu);
+	int ret = true;
+	int nr_to_demote = 0;
+	int max_nr_free_pages = MAX_NR_FREE_PAGES;
+	enum page_type type = BASEPAGE;
+
+	printk("kdemoted init: cpu[%d],nid[%d]\n", cpu, nid);
+	set_freezable();
+
+	while(!kthread_should_stop()) {
+		int thp_enabled =
+			transparent_hugepage_flags & (1 << TRANSPARENT_HUGEPAGE_FLAG);
+		wait_event_interruptible(kdemoted_wait[cpu],
+						kdemoted_wait_event(cpu));
+
+		for (type = BASEPAGE; type < NR_PAGE_TYPE; type++) {
+			if (type == BASEPAGE)
+				max_nr_free_pages = MAX_NR_FREE_PAGES;
+			else if (type == HUGEPAGE)
+				max_nr_free_pages = MAX_NR_FREE_HPAGES;
+
+			/* Skip THP */
+			if (!thp_enabled && type == HUGEPAGE)
+				continue;
+			else if (thp_enabled && type == BASEPAGE)
+				continue;
+
+			if (batch_demotion)
+				nr_to_demote =	max_nr_free_pages - promote_area[type][cpu].nr_free;
+			else
+				nr_to_demote = 1;
+
+#ifdef DEBUG
+			printk("kdemoted%d,type:%s before nr_free:%d,"
+					"nr_to_demote:%d\n",
+					cpu, type?"hugepage":"basepage",
+					promote_area[type][cpu].nr_free,
+					nr_to_demote);
+#endif
+			ret = __kdemoted(nid, cpu, nr_to_demote, type);
+#ifdef DEBUG
+			printk("kdemoted%d,type:%s after nr_free:%d,"
+					"nr_to_demote:%d\n",
+					cpu, type?"hugepage":"basepage",
+					promote_area[type][cpu].nr_free,
+					nr_to_demote);
+#endif
+			spin_lock_irq(&promote_lock[cpu]);
+			if (promote_area[type][cpu].nr_free >= max_nr_free_pages
+					|| next_demotion_node(nid) == NUMA_NO_NODE
+					|| ret == false)
+				kdemoted_wakeup[cpu] = 0;
+			spin_unlock_irq(&promote_lock[cpu]);
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(kdemoted);
+
+int page_demoted_run(int *cpu)
+{
+	int nid = cpu_to_node(*cpu);
+	int ret = 0;
+
+	page_demoted[*cpu] = kthread_run(kdemoted, cpu, "kdemoted%d", *cpu);
+	if (IS_ERR(page_demoted[*cpu])) {
+		pr_err("Failed to start kdemoted on node%d/cpu%d\n", nid, *cpu);
+		ret = PTR_ERR(page_demoted[*cpu]);
+		page_demoted[*cpu] = NULL;
+	}
+	return ret;
+}
+
+void kdemoted_stop(int cpu)
+{
+	if (page_demoted[cpu]) {
+		kthread_stop(page_demoted[cpu]);
+		page_demoted = NULL;
+	}
+}
+
+static int __init kdemoted_init(void)
+{
+	const struct cpumask *cpumasks = cpu_online_mask;
+	int nr_cpus = cpumask_weight(cpumasks);
+	int *cpu = kmalloc(sizeof(int) * nr_cpus, GFP_KERNEL);
+	int i;
+	int node;
+
+	page_demoted = kmalloc(sizeof(struct task_struct *) * nr_cpus, GFP_KERNEL);
+	kdemoted_wait = kmalloc(sizeof(wait_queue_head_t) * nr_cpus, GFP_KERNEL);
+	kdemoted_wakeup = kmalloc(sizeof(int) * nr_cpus, GFP_KERNEL);
+	kdemoted_memcg = kmalloc(sizeof(struct mem_cgroup *) * nr_cpus, GFP_KERNEL);
+
+	for_each_cpu(i, cpumasks) {
+		cpu[i] = i;
+		node = cpu_to_node(cpu[i]);
+		page_demoted[i] = kmalloc(sizeof(struct task_struct), GFP_KERNEL);
+		init_waitqueue_head(&kdemoted_wait[i]);
+		kdemoted_wakeup[i] = 0;
+		kdemoted_memcg[i] = NULL;
+
+		page_demoted_run(&cpu[i]);
+		do_set_cpus_allowed(page_demoted[i], cpumask_of_node(node));
+	}
+	return 0;
+}
+module_init(kdemoted_init)
+
+void __init promote_init(void)
+{
+	const struct cpumask *cpumasks = cpu_online_mask;
+	enum page_type type = BASEPAGE;
+	int nr_cpus = cpumask_weight(cpumasks);
+	int cpu;
+#if 0
+	struct page *page;
+	int nr_page;
+#endif
+	int order = 0;
+	int max_nr_free_pages = MAX_NR_FREE_PAGES;
+
+	struct page_info pi;
+
+	gfp_t bmask = (GFP_HIGHUSER_MOVABLE |
+			__GFP_THISNODE | __GFP_NOMEMALLOC |
+			__GFP_NORETRY | __GFP_NOWARN) &
+			~__GFP_RECLAIM; // basepage mask;
+	gfp_t hmask = bmask | GFP_TRANSHUGE_LIGHT; //hugepage mask;
+	gfp_t mask;
+	pi.pfn = 0;
+	pi.last_cpu = 0;
+
+	printk(KERN_INFO "promote_init called\n");
+
+	promote_lock = kmalloc(sizeof(spinlock_t) * nr_cpus, GFP_KERNEL);
+	if (!promote_lock) {
+		printk(KERN_ERR "kmalloc failed in promote_lock\n");
+		return;
+	}
+
+	for (type = BASEPAGE; type < NR_PAGE_TYPE; type++) {
+		promote_area[type] = kmalloc(sizeof(struct free_promote_area) * nr_cpus, GFP_KERNEL);
+		if (!promote_area[type]) {
+			printk(KERN_ERR "kmalloc failed in promote_area\n");
+			return;
+		}
+
+		if (type == HUGEPAGE) {
+			mask = hmask;
+			max_nr_free_pages = MAX_NR_FREE_HPAGES;
+			order = HPAGE_PMD_ORDER;
+		} else {
+			mask = bmask;
+			max_nr_free_pages = MAX_NR_FREE_PAGES;
+			order = 0;
+		}
+
+		/* Initialized values */
+		for_each_cpu(cpu, cpumasks) {
+			INIT_LIST_HEAD(&promote_area[type][cpu].free_list);
+			promote_area[type][cpu].nr_free = 0;
+			spin_lock_init(&promote_lock[cpu]);
+
+
+#if 0 /* maybe unnecessary..? */
+			for(nr_page = 0; nr_page < max_nr_free_pages; nr_page++) {
+				page = __alloc_pages_nodemask(mask, order,
+						cpu_to_node(cpu), NULL);
+
+				if (!page) {
+					printk(KERN_ERR "failed to alloc page\n");
+					return;
+				}
+
+				if (PageTransHuge(page))
+					prep_transhuge_page(page);
+				add_page_for_promotion(page, &promote_area[type][cpu]);
+			}
+#endif
+		}
+	}
+
+	printk(KERN_INFO "free_promote_init success!\n");
+	printk(KERN_INFO "Free pages per cpu\n");
+	printk(KERN_INFO "NR_CPUS:%d\n", nr_cpus);
+	printk(KERN_INFO "free_promote_area[%d-%d]: (base, %d), (huge, %d)\n",
+			0, nr_cpus - 1,
+			nr_cpus * MAX_NR_FREE_PAGES, nr_cpus * MAX_NR_FREE_HPAGES);
+	printk(KERN_INFO "added page extension size:%ld B\n", sizeof(pi));
+	printk(KERN_INFO "struct list_head list size: %ld B\n", sizeof(pi.list));
+	printk(KERN_INFO "unsigned long pfn size: %ld B\n", sizeof(pi.pfn));
+	printk(KERN_INFO "int8_t last_cpu size: %ld B\n", sizeof(pi.last_cpu));
+	printk(KERN_INFO "access_bitmap size: %ld B\n", sizeof(pi.access_bitmap));
 }
 #endif

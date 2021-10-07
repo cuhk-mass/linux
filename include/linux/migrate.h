@@ -25,7 +25,43 @@ enum migrate_reason {
 	MR_MEMPOLICY_MBIND,
 	MR_NUMA_MISPLACED,
 	MR_CONTIG_RANGE,
+	MR_DEMOTION,
+	MR_PROMOTION,
 	MR_TYPES
+};
+
+enum migrate_fail_reason {
+	MFR_UNKNOWN,
+	MFR_DST_NODE_FULL,
+	MFR_NUMA_ISOLATE,
+	MFR_NOMEM_FAIL,
+	MFR_REFCOUNT_FAIL,
+	MFR_NR_REASONS
+};
+
+enum migrate_hmem_reason {
+	MR_HMEM_UNKNOWN,
+	MR_HMEM_DEMOTE,
+	MR_HMEM_LOCAL_PROMOTE,
+	MR_HMEM_REMOTE_PROMOTE,
+	MR_HMEM_MIGRATE,
+	MR_HMEM_NR_REASONS
+};
+
+enum migrate_hmem_fail_reason {
+	MR_HMEM_UNKNOWN_FAIL,
+	MR_HMEM_LOCAL_PROMOTE_FAIL,
+	MR_HMEM_REMOTE_PROMOTE_FAIL,
+	MR_HMEM_MIGRATE_FAIL,
+	MR_HMEM_NR_FAIL_REASONS
+};
+
+struct migrate_detail {
+	enum migrate_reason reason;
+	enum migrate_fail_reason fail_reason;
+	enum migrate_hmem_reason h_reason;
+	enum migrate_hmem_reason h_reason_orig;
+	enum migrate_hmem_fail_reason h_fail_reason;
 };
 
 /* In mm/debug.c; also keep sync with include/trace/events/migrate.h */
@@ -66,7 +102,8 @@ extern int migrate_page(struct address_space *mapping,
 			struct page *newpage, struct page *page,
 			enum migrate_mode mode);
 extern int migrate_pages(struct list_head *l, new_page_t new, free_page_t free,
-		unsigned long private, enum migrate_mode mode, int reason);
+		unsigned long private, enum migrate_mode mode,
+		struct migrate_detail *m_detail);
 extern int isolate_movable_page(struct page *page, isolate_mode_t mode);
 extern void putback_movable_page(struct page *page);
 
@@ -78,6 +115,8 @@ extern int migrate_huge_page_move_mapping(struct address_space *mapping,
 				  struct page *newpage, struct page *page);
 extern int migrate_page_move_mapping(struct address_space *mapping,
 		struct page *newpage, struct page *page, int extra_count);
+
+extern int copy_page_multithread(struct page *to, struct page *from, int nr_pages);
 #else
 
 static inline void putback_movable_pages(struct list_head *l) {}
@@ -104,6 +143,7 @@ static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 	return -ENOSYS;
 }
 
+
 #endif /* CONFIG_MIGRATION */
 
 #ifdef CONFIG_COMPACTION
@@ -125,6 +165,17 @@ static inline void __ClearPageMovable(struct page *page)
 extern bool pmd_trans_migrating(pmd_t pmd);
 extern int migrate_misplaced_page(struct page *page,
 				  struct vm_area_struct *vma, int node);
+extern int migrate_demote_mapping(struct page *page);
+extern int migrate_promote_mapping(struct page *page);
+
+extern int wakeup_kdemoted(int dst_cpu, struct page *fault_page);
+extern int try_demote_from_busy_node(struct page *fault_page, int busy_nid,
+		unsigned int mode);
+extern int try_demote_page_cache(struct pglist_data *pgdat, struct lruvec *lruvec);
+extern bool migrate_balanced_pgdat(struct pglist_data *pgdat, unsigned int order);
+extern void numamigrate_fail_reason(struct migrate_detail *m_detail,
+				enum migrate_hmem_reason h_reason);
+extern void numamigrate_reason(struct migrate_detail *m_detail, int src_nid, int dst_nid);
 #else
 static inline bool pmd_trans_migrating(pmd_t pmd)
 {
@@ -134,6 +185,41 @@ static inline int migrate_misplaced_page(struct page *page,
 					 struct vm_area_struct *vma, int node)
 {
 	return -EAGAIN; /* can't migrate now */
+}
+static inline int migrate_demote_mapping(struct page *page)
+{
+	return -ENOSYS;
+}
+static inline int migrate_promote_mapping(struct page *page)
+{
+	return -ENOSYS;
+}
+static inline int wakeup_kdemoted(int dst_cpu, struct page *fault_page)
+{
+	return false;
+}
+static inline int try_demote_from_busy_node(struct page *fault_page, int busy_nid,
+		unsigned int mode)
+{
+	return false;
+}
+static inline int try_demote_page_cache(struct pglist_data *pgdat,
+				struct lruvec *lruvec)
+{
+	return false;
+}
+static inline bool migrate_balanced_pgdat(struct pglist_data *pgdat,
+				unsigned int order)
+{
+	return false;
+}
+static inline void numamigrate_fail_reason(struct migrate_detail *m_detail,
+				enum migrate_hmem_reason h_reason)
+{
+}
+static inline void numamigrate_reason(struct migrate_detail *m_detail,
+				int src_nid, int dst_nid)
+{
 }
 #endif /* CONFIG_NUMA_BALANCING */
 
@@ -154,6 +240,13 @@ static inline int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 }
 #endif /* CONFIG_NUMA_BALANCING && CONFIG_TRANSPARENT_HUGEPAGE*/
 
+
+#ifdef CONFIG_BLOCK
+bool buffer_migrate_lock_buffers(struct buffer_head *head,
+			enum migrate_mode mode);
+#endif
+
+int writeout(struct address_space *mapping, struct page *page);
 
 #ifdef CONFIG_MIGRATION
 

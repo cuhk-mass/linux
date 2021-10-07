@@ -134,6 +134,11 @@ static inline int register_one_node(int nid)
 	return error;
 }
 
+extern int next_migration_node(int current_node);
+extern int next_promotion_node(int current_node);
+extern int next_demotion_node(int current_node);
+extern int is_top_node(int current_node);
+extern int is_bottom_node(int current_node);
 extern void unregister_one_node(int nid);
 extern int register_cpu_under_node(unsigned int cpu, unsigned int nid);
 extern int unregister_cpu_under_node(unsigned int cpu, unsigned int nid);
@@ -175,6 +180,29 @@ static inline void unregister_memory_block_under_nodes(struct memory_block *mem_
 static inline void register_hugetlbfs_with_node(node_registration_func_t reg,
 						node_registration_func_t unreg)
 {
+}
+
+static inline int next_migration_node(int current_node)
+{
+	return -1;
+}
+
+static inline int next_promotion_node(int current_node)
+{
+	return -1;
+}
+
+static inline int next_demotion_node(int current_node)
+{
+	return -1;
+}
+static inline int is_top_node(int current_node)
+{
+	return -1;
+}
+static inline int is_bottom_node(int current_node)
+{
+	return -1;
 }
 #endif
 

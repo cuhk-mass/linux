@@ -66,6 +66,10 @@
 #include <linux/task_work.h>
 #include <linux/tsacct_kern.h>
 
+#ifdef CONFIG_PAGE_BALANCING
+#include <linux/page_balancing.h>
+#endif
+
 #include <asm/tlb.h>
 
 #ifdef CONFIG_PARAVIRT

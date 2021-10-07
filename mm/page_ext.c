@@ -8,6 +8,9 @@
 #include <linux/kmemleak.h>
 #include <linux/page_owner.h>
 #include <linux/page_idle.h>
+#ifdef CONFIG_PAGE_BALANCING
+#include <linux/page_balancing.h>
+#endif
 
 /*
  * struct page extension
@@ -64,6 +67,9 @@ static struct page_ext_operations *page_ext_ops[] = {
 #endif
 #if defined(CONFIG_IDLE_PAGE_TRACKING) && !defined(CONFIG_64BIT)
 	&page_idle_ops,
+#endif
+#ifdef CONFIG_PAGE_BALANCING
+	&page_info_ops,
 #endif
 };
 

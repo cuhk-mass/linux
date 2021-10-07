@@ -10,6 +10,10 @@
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 
+#ifdef CONFIG_PAGE_BALANCING
+#include <linux/page_balancing.h>
+#endif
+
 struct pglist_data *first_online_pgdat(void)
 {
 	return NODE_DATA(first_online_node);

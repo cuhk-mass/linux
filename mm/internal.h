@@ -165,6 +165,23 @@ extern void post_alloc_hook(struct page *page, unsigned int order,
 					gfp_t gfp_flags);
 extern int user_min_free_kbytes;
 
+#ifdef CONFIG_PAGE_BALANCING
+struct free_promote_area {
+	struct list_head free_list;
+	uint32_t nr_free;
+};
+
+enum page_type {
+	BASEPAGE,
+	HUGEPAGE,
+	NR_PAGE_TYPE
+};
+
+extern struct free_promote_area *promote_area[NR_PAGE_TYPE];
+extern struct page* alloc_promote_page(struct page *page, unsigned long data);
+extern struct page* alloc_demote_page(struct page *page, unsigned long data);
+#endif
+
 #if defined CONFIG_COMPACTION || defined CONFIG_CMA
 
 /*

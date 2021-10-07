@@ -100,6 +100,12 @@ struct free_area {
 	unsigned long		nr_free;
 };
 
+struct lap_area {
+	struct list_head	lap_list; // Least-Accessed Page list
+	long long		nr_free;
+	unsigned long		demotion_count; // demotion count per LAP level
+};
+
 /* Used for pages not on another list */
 static inline void add_to_free_area(struct page *page, struct free_area *area,
 			     int migratetype)
@@ -206,7 +212,21 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
-	NR_VM_ZONE_STAT_ITEMS };
+#define HMEM_MIGRATE(__hmem_name)      __hmem_name ## _SRC, __hmem_name ## _DEST
+	HMEM_MIGRATE_UNKNOWN,
+	HMEM_MIGRATE_FIRST_ENTRY = HMEM_MIGRATE_UNKNOWN,
+	HMEM_MIGRATE(MR_HMEM_DEMOTE),
+	HMEM_MIGRATE(MR_HMEM_LOCAL_PROMOTE),
+	HMEM_MIGRATE(MR_HMEM_REMOTE_PROMOTE),
+	HMEM_MIGRATE(MR_HMEM_MIGRATE),
+#define HMEM_MIGRATE_FAIL(__hmem_name)      __hmem_name ## FAIL_SRC, __hmem_name ## FAIL_DEST
+	HMEM_MIGRATE_UNKNOWN_FAIL,
+	HMEM_MIGRATE_FAIL_FIRST_ENTRY = HMEM_MIGRATE_UNKNOWN_FAIL,
+	HMEM_MIGRATE_FAIL(MR_HMEM_LOCAL_PROMOTE),
+	HMEM_MIGRATE_FAIL(MR_HMEM_REMOTE_PROMOTE),
+	HMEM_MIGRATE_FAIL(MR_HMEM_MIGRATE),
+	NR_VM_ZONE_STAT_ITEMS
+};
 
 enum node_stat_item {
 	NR_LRU_BASE,
@@ -242,6 +262,9 @@ enum node_stat_item {
 	NR_DIRTIED,		/* page dirtyings since bootup */
 	NR_WRITTEN,		/* page writings since bootup */
 	NR_KERNEL_MISC_RECLAIMABLE,	/* reclaimable non-slab kernel pages */
+	NR_DEFERRED,		/* migration fail pages */
+	NR_TRACKED,		/* tracked pages by APM */
+	NR_FREE_PROMOTE,	/* page at free promote area */
 	NR_VM_NODE_STAT_ITEMS
 };
 
@@ -761,6 +784,11 @@ typedef struct pglist_data {
 	unsigned long split_queue_len;
 #endif
 
+#ifdef CONFIG_PAGE_BALANCING
+	struct list_head deferred_list;
+	// FIXME: Need to use macro
+	struct lap_area lap_area[9]; // MAX_ACCESS_LEVEL + 1
+#endif
 	/* Fields commonly accessed by the page reclaim scanner */
 	struct lruvec		lruvec;
 
@@ -821,6 +849,7 @@ extern void init_currently_empty_zone(struct zone *zone, unsigned long start_pfn
 				     unsigned long size);
 
 extern void lruvec_init(struct lruvec *lruvec);
+extern void deferred_list_init(struct pglist_data *pgdat);
 
 static inline struct pglist_data *lruvec_pgdat(struct lruvec *lruvec)
 {

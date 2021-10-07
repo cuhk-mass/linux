@@ -72,6 +72,11 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 
+#ifdef CONFIG_PAGE_BALANCING
+#include <linux/page_balancing.h>
+#include <linux/sched/sysctl.h>
+#endif
+
 #include <asm/io.h>
 #include <asm/mmu_context.h>
 #include <asm/pgalloc.h>
@@ -3624,12 +3629,31 @@ static int numa_migrate_prep(struct page *page, struct vm_area_struct *vma,
 				unsigned long addr, int page_nid,
 				int *flags)
 {
+	int dst_nid = numa_node_id();
+	int mode = sysctl_numa_balancing_extended_mode;
+	struct pglist_data *pgdat = page_pgdat(page);
+
 	get_page(page);
 
 	count_vm_numa_event(NUMA_HINT_FAULTS);
-	if (page_nid == numa_node_id()) {
+
+	if (page_nid == dst_nid) {
 		count_vm_numa_event(NUMA_HINT_FAULTS_LOCAL);
 		*flags |= TNF_FAULT_LOCAL;
+	}
+
+	/* Check local or remote NUMA page fault */
+	if (mode & NUMA_BALANCING_EXCHANGE)
+	{
+		/* Local NUMA_HINT_FAULT */
+		if (page_nid == dst_nid) {
+			spin_lock_irq(&pgdat->lru_lock);
+			if (PageDeferred(page)) {
+				del_page_from_deferred_list(page);
+				count_vm_event(PGACTIVATE_DEFERRED_LOCAL);
+			}
+			spin_unlock_irq(&pgdat->lru_lock);
+		}
 	}
 
 	return mpol_misplaced(page, vma, addr);
@@ -3642,7 +3666,7 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 	int page_nid = NUMA_NO_NODE;
 	int last_cpupid;
 	int target_nid;
-	bool migrated = false;
+	int migrated_nid;
 	pte_t pte, old_pte;
 	bool was_writable = pte_savedwrite(vmf->orig_pte);
 	int flags = 0;
@@ -3670,6 +3694,12 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 		pte = pte_mkwrite(pte);
 	ptep_modify_prot_commit(vma, vmf->address, vmf->pte, old_pte, pte);
 	update_mmu_cache(vma, vmf->address, vmf->pte);
+
+	if (pte_young(old_pte))
+		flags |= TNF_YOUNG;
+
+	if (vmf->flags & FAULT_FLAG_WRITE)
+		flags |= TNF_WRITE;
 
 	page = vm_normal_page(vma, vmf->address, pte);
 	if (!page) {
@@ -3712,9 +3742,9 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 	}
 
 	/* Migrate to the requested node */
-	migrated = migrate_misplaced_page(page, vma, target_nid);
-	if (migrated) {
-		page_nid = target_nid;
+	migrated_nid = migrate_misplaced_page(page, vma, target_nid);
+	if (migrated_nid != NUMA_NO_NODE) {
+		page_nid = migrated_nid;
 		flags |= TNF_MIGRATED;
 	} else
 		flags |= TNF_MIGRATE_FAIL;

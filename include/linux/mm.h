@@ -219,6 +219,7 @@ extern int overcommit_kbytes_handler(struct ctl_table *, int, void __user *,
 #define PAGE_ALIGNED(addr)	IS_ALIGNED((unsigned long)(addr), PAGE_SIZE)
 
 #define lru_to_page(head) (list_entry((head)->prev, struct page, lru))
+#define lru_to_page_head(head) (list_entry((head)->next, struct page, lru))
 
 /*
  * Linux kernel virtual memory manager primitives.
@@ -2249,6 +2250,7 @@ extern void zone_pcp_reset(struct zone *zone);
 extern int min_free_kbytes;
 extern int watermark_boost_factor;
 extern int watermark_scale_factor;
+extern void promote_init(void);
 
 /* nommu.c */
 extern atomic_long_t mmap_pages_allocated;

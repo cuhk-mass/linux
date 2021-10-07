@@ -726,6 +726,12 @@ config GUP_GET_PTE_LOW_HIGH
 config ARCH_HAS_PTE_SPECIAL
 	bool
 
+config PAGE_FAULT_PROFILE
+	bool "Page Promotion/Demotion Latency Profile"
+	def_bool n
+	help
+	  Profile promotion and demotion latency on tiered memory systems
+
 #
 # Some architectures require a special hugepage directory format that is
 # required to support multiple hugepage sizes. For example a4fe3ce76

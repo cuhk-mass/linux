@@ -4,6 +4,9 @@
 
 #include <linux/huge_mm.h>
 #include <linux/swap.h>
+#ifdef CONFIG_PAGE_BALANCING
+#include <linux/page_balancing.h>
+#endif
 
 /**
  * page_is_file_cache - should the page be on a file LRU or anon LRU?
@@ -44,6 +47,27 @@ static __always_inline void update_lru_size(struct lruvec *lruvec,
 #endif
 }
 
+/*
+ * Update LRU sizes after isolating pages. The LRU size updates must
+ * be complete before mem_cgroup_update_lru_size due to a santity check.
+ */
+static __always_inline void update_lru_sizes(struct lruvec *lruvec,
+			enum lru_list lru, unsigned long *nr_zone_taken)
+{
+	int zid;
+
+	for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+		if (!nr_zone_taken[zid])
+			continue;
+
+		__update_lru_size(lruvec, lru, zid, -nr_zone_taken[zid]);
+#ifdef CONFIG_MEMCG
+		mem_cgroup_update_lru_size(lruvec, lru, zid, -nr_zone_taken[zid]);
+#endif
+	}
+
+}
+
 static __always_inline void add_page_to_lru_list(struct page *page,
 				struct lruvec *lruvec, enum lru_list lru)
 {
@@ -63,6 +87,7 @@ static __always_inline void del_page_from_lru_list(struct page *page,
 {
 	list_del(&page->lru);
 	update_lru_size(lruvec, lru, page_zonenum(page), -hpage_nr_pages(page));
+	del_page_from_deferred_list(page);
 }
 
 /**

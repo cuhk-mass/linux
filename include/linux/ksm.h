@@ -53,6 +53,7 @@ struct page *ksm_might_need_to_copy(struct page *page,
 
 void rmap_walk_ksm(struct page *page, struct rmap_walk_control *rwc);
 void ksm_migrate_page(struct page *newpage, struct page *oldpage);
+void ksm_exchange_page(struct page *to_page, struct page *from_page);
 bool reuse_ksm_page(struct page *page,
 			struct vm_area_struct *vma, unsigned long address);
 
@@ -86,6 +87,10 @@ static inline void rmap_walk_ksm(struct page *page,
 }
 
 static inline void ksm_migrate_page(struct page *newpage, struct page *oldpage)
+{
+}
+static inline void ksm_exchange_page(struct page *to_page,
+		struct page *from_page)
 {
 }
 static inline bool reuse_ksm_page(struct page *page,

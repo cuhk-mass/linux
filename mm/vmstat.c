@@ -28,6 +28,7 @@
 #include <linux/mm_inline.h>
 #include <linux/page_ext.h>
 #include <linux/page_owner.h>
+#include <linux/migrate.h>
 
 #include "internal.h"
 
@@ -527,6 +528,140 @@ void inc_zone_page_state(struct page *page, enum zone_stat_item item)
 	mod_zone_state(page_zone(page), item, 1, 1);
 }
 EXPORT_SYMBOL(inc_zone_page_state);
+
+void inc_zone_state(struct zone *zone, enum zone_stat_item item)
+{
+	mod_zone_state(zone, item, 1, 1);
+}
+EXPORT_SYMBOL(inc_zone_state);
+
+void inc_hmem_state(enum migrate_hmem_reason hr, struct page *src, struct page *dst)
+{
+	/*
+	 * There are two zone stats for each 'migrate_hmem_reason',
+	 * a source and a destination.  Given the hmem_reason,
+	 * calculate the two corresponding zone stats:
+	 */
+	int zone_stat_src = HMEM_MIGRATE_FIRST_ENTRY + 2 * hr - 1;
+	int zone_stat_dst = HMEM_MIGRATE_FIRST_ENTRY + 2 * hr;
+
+	/*
+	 * HMEM_MIGRATE_FIRST_ENTRY is also the "unknown" which will
+	 * be tolerated for now since all code paths have not had
+	 * hmem migrations reasons added.
+	 *
+	 * An invalid value here probably comes from an uninitialized
+	 * stack instance of 'struct migrate_detail'.
+	 */
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN || hr >= MR_HMEM_NR_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN)
+		return;
+	mod_zone_page_state(page_zone(src), zone_stat_src, hpage_nr_pages(src));
+	mod_zone_page_state(page_zone(dst), zone_stat_dst, hpage_nr_pages(dst));
+}
+EXPORT_SYMBOL(inc_hmem_state);
+
+void inc_hmem_src_state(enum migrate_hmem_reason hr, struct page *src)
+{
+	/*
+	 * There are one zone stats for each 'migrate_hmem_reason',
+	 * a source page.  Given the hmem_reason, calculate the 
+         * corresponding zone stats:
+	 */
+	int zone_stat_src = HMEM_MIGRATE_FIRST_ENTRY + 2 * hr - 1;
+
+	/*
+	 * HMEM_MIGRATE_FIRST_ENTRY is also the "unknown" which will
+	 * be tolerated for now since all code paths have not had
+	 * hmem migrations reasons added.
+	 *
+	 * An invalid value here probably comes from an uninitialized
+	 * stack instance of 'struct migrate_detail'.
+	 */
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN || hr >= MR_HMEM_NR_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN)
+		return;
+	mod_zone_page_state(page_zone(src), zone_stat_src, hpage_nr_pages(src));
+}
+EXPORT_SYMBOL(inc_hmem_src_state);
+
+void inc_hmem_dst_state(enum migrate_hmem_reason hr, struct page *dst)
+{
+	/*
+	 * There are one zone stats for each 'migrate_hmem_reason',
+	 * a source page.  Given the hmem_reason, calculate the 
+         * corresponding zone stats:
+	 */
+	int zone_stat_dst = HMEM_MIGRATE_FIRST_ENTRY + 2 * hr;
+
+	/*
+	 * HMEM_MIGRATE_FIRST_ENTRY is also the "unknown" which will
+	 * be tolerated for now since all code paths have not had
+	 * hmem migrations reasons added.
+	 *
+	 * An invalid value here probably comes from an uninitialized
+	 * stack instance of 'struct migrate_detail'.
+	 */
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN || hr >= MR_HMEM_NR_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN)
+		return;
+	mod_zone_page_state(page_zone(dst), zone_stat_dst, hpage_nr_pages(dst));
+}
+EXPORT_SYMBOL(inc_hmem_dst_state);
+
+void inc_hmem_fail_state(enum migrate_hmem_fail_reason hr, int src_nid,
+				int dst_nid, int is_huge)
+{
+	struct pglist_data *pgdat_src = NODE_DATA(src_nid);
+	struct pglist_data *pgdat_dst = NODE_DATA(dst_nid);
+	struct zone *zone_src = &pgdat_src->node_zones[ZONE_NORMAL];
+	struct zone *zone_dst = &pgdat_dst->node_zones[ZONE_NORMAL];
+	int zone_stat_src = HMEM_MIGRATE_FAIL_FIRST_ENTRY + 2 * hr - 1;
+	int zone_stat_dst = HMEM_MIGRATE_FAIL_FIRST_ENTRY + 2 * hr;
+	int nr_pages = is_huge ? 512 : 1;
+
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN_FAIL || hr >= MR_HMEM_NR_FAIL_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN_FAIL)
+		return;
+
+	mod_zone_state(zone_src, zone_stat_src, nr_pages, 0);
+	mod_zone_state(zone_dst, zone_stat_dst, nr_pages, 0);
+}
+EXPORT_SYMBOL(inc_hmem_fail_state);
+
+void inc_hmem_fail_src_state(enum migrate_hmem_fail_reason hr, int src_nid, int is_huge)
+{
+	struct pglist_data *pgdat = NODE_DATA(src_nid);
+	struct zone *zone = &pgdat->node_zones[ZONE_NORMAL];
+	int zone_stat_src = HMEM_MIGRATE_FAIL_FIRST_ENTRY + 2 * hr - 1;
+	int nr_pages = is_huge ? 512 : 1;
+
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN_FAIL || hr >= MR_HMEM_NR_FAIL_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN_FAIL)
+		return;
+	mod_zone_state(zone, zone_stat_src, nr_pages, 0);
+}
+EXPORT_SYMBOL(inc_hmem_fail_src_state);
+
+void inc_hmem_fail_dst_state(enum migrate_hmem_fail_reason hr, int dst_nid, int is_huge)
+{
+	struct pglist_data *pgdat = NODE_DATA(dst_nid);
+	struct zone *zone = &pgdat->node_zones[ZONE_NORMAL];
+	int zone_stat_dst = HMEM_MIGRATE_FAIL_FIRST_ENTRY + 2 * hr;
+	int nr_pages = is_huge ? 512 : 1;
+
+	if (WARN_ON_ONCE(hr < MR_HMEM_UNKNOWN_FAIL || hr >= MR_HMEM_NR_FAIL_REASONS))
+		return;
+	if (hr == MR_HMEM_UNKNOWN_FAIL)
+		return;
+	mod_zone_state(zone, zone_stat_dst, nr_pages, 0);
+}
+EXPORT_SYMBOL(inc_hmem_fail_dst_state);
 
 void dec_zone_page_state(struct page *page, enum zone_stat_item item)
 {
@@ -1123,6 +1258,22 @@ const char * const vmstat_text[] = {
 	"nr_zspages",
 #endif
 	"nr_free_cma",
+	"hmem_unknown",
+	"hmem_demote_src",
+	"hmem_demote_dst",
+	"hmem_promote_local_src",
+	"hmem_promote_local_dst",
+	"hmem_promote_remote_src",
+	"hmem_promote_remote_dst",
+	"hmem_migrate_src",
+	"hmem_migrate_dst",
+	"hmem_unknown_fail",
+	"hmem_promote_local_fail_src",
+	"hmem_promote_local_fail_dst",
+	"hmem_promote_remote_fail_src",
+	"hmem_promote_remote_fail_dst",
+	"hmem_migrate_fail_src",
+	"hmem_migrate_fail_dst",
 
 	/* enum numa_stat_item counters */
 #ifdef CONFIG_NUMA
@@ -1165,6 +1316,9 @@ const char * const vmstat_text[] = {
 	"nr_dirtied",
 	"nr_written",
 	"nr_kernel_misc_reclaimable",
+	"nr_deferred",
+	"nr_tracked",
+	"nr_reserved_pages",
 
 	/* enum writeback_stat_item counters */
 	"nr_dirty_threshold",
@@ -1223,6 +1377,31 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_MIGRATION
 	"pgmigrate_success",
 	"pgmigrate_fail",
+	"pgmigrate_dst_node_full_fail",
+	"pgmigrate_numa_isolate_fail",
+	"pgmigrate_nomem_fail",
+	"pgmigrate_refcount_fail",
+	"pgexchange_success",
+	"pgexchange_fail",
+	"pgexchange_no_page_fail",
+	"pgexchange_node_unmatch_fail",
+	"pgexchange_list_empty_fail",
+	"pgexchange_scan_fail",
+	"pgexchange_busy_fail",
+	"pgactivate_deferred",
+	"pgactivate_deferred_local",
+	"pgdemote_no_page_fail",
+	"pgdemote_no_lru_fail",
+	"pgdemote_busy_fail",
+	"pgdemote_background",
+	"pgdemote_file",
+	"pgpromote_empty_pool_fail",
+	"pgpromote_no_page_fail",
+	"pgpromote_low_freq_fail",
+	"pgpromote_reserved",
+	"pgrepromote",
+	"pgfree_demoted",
+	"nr_page_skipped",
 #endif
 #ifdef CONFIG_COMPACTION
 	"compact_migrate_scanned",
@@ -1509,6 +1688,43 @@ static int pagetypeinfo_show(struct seq_file *m, void *arg)
 	return 0;
 }
 
+static void lap_show_print(struct seq_file *m, pg_data_t *pgdat)
+{
+	int order;
+
+	seq_printf(m, "Node %d ", pgdat->node_id);
+	for (order = 0; order <= MAX_ACCESS_LEVEL; order++)
+		seq_printf(m, "%7llu ", pgdat->lap_area[order].nr_free);
+	seq_putc(m, '\n');
+}
+
+static void lap_count_show_print(struct seq_file *m, pg_data_t *pgdat)
+{
+	int order;
+
+	seq_printf(m, "Node %d ", pgdat->node_id);
+	for (order = 0; order <= MAX_ACCESS_LEVEL; order++)
+		seq_printf(m, "%7lu ", pgdat->lap_area[order].demotion_count);
+	seq_putc(m, '\n');
+}
+
+static int lap_show(struct seq_file *m, void *arg)
+{
+	pg_data_t *pgdat = (pg_data_t *)arg;
+
+	/* check memoryless node */
+	if (!node_state(pgdat->node_id, N_MEMORY))
+		return 0;
+
+	seq_printf(m, "LAP pages at order\n");
+	lap_show_print(m, pgdat);
+
+	seq_printf(m, "LAP page demotion counts\n");
+	lap_count_show_print(m, pgdat);
+
+	return 0;
+}
+
 static const struct seq_operations fragmentation_op = {
 	.start	= frag_start,
 	.next	= frag_next,
@@ -1522,6 +1738,14 @@ static const struct seq_operations pagetypeinfo_op = {
 	.stop	= frag_stop,
 	.show	= pagetypeinfo_show,
 };
+
+static const struct seq_operations leastaccessedpage_op = {
+	.start	= frag_start,
+	.next	= frag_next,
+	.stop	= frag_stop,
+	.show	= lap_show,
+};
+
 
 static bool is_zone_first_populated(pg_data_t *pgdat, struct zone *zone)
 {
@@ -1973,6 +2197,7 @@ void __init init_mm_internals(void)
 	proc_create_seq("pagetypeinfo", 0444, NULL, &pagetypeinfo_op);
 	proc_create_seq("vmstat", 0444, NULL, &vmstat_op);
 	proc_create_seq("zoneinfo", 0444, NULL, &zoneinfo_op);
+	proc_create_seq("lapinfo", 0444, NULL, &leastaccessedpage_op);
 #endif
 }
 

@@ -33,6 +33,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/page_owner.h>
+#include <linux/sched/sysctl.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -1539,10 +1540,15 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 	bool migrated = false;
 	bool was_writable;
 	int flags = 0;
+	int mode = sysctl_numa_balancing_extended_mode;
 
 	vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
 	if (unlikely(!pmd_same(pmd, *vmf->pmd)))
 		goto out_unlock;
+
+	/* Only migrate if accessed twice */
+	if (pmd_young(*vmf->pmd))
+		flags |= TNF_YOUNG;
 
 	/*
 	 * If there are potential migrations, wait for completion and retry
@@ -1563,9 +1569,21 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 	page_nid = page_to_nid(page);
 	last_cpupid = page_cpupid_last(page);
 	count_vm_numa_event(NUMA_HINT_FAULTS);
+
 	if (page_nid == this_nid) {
 		count_vm_numa_event(NUMA_HINT_FAULTS_LOCAL);
 		flags |= TNF_FAULT_LOCAL;
+
+		if (mode & NUMA_BALANCING_EXCHANGE) {
+			struct pglist_data *pgdat = page_pgdat(page);
+
+			spin_lock_irq(&pgdat->lru_lock);
+			if (PageDeferred(page)) {
+				del_page_from_deferred_list(page);
+				count_vm_events(PGACTIVATE_DEFERRED_LOCAL, hpage_nr_pages(page));
+			}
+			spin_unlock_irq(&pgdat->lru_lock);
+		}
 	}
 
 	/* See similar comment in do_numa_page for explanation */
@@ -1954,17 +1972,36 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
 	}
 #endif
 
-	/*
-	 * Avoid trapping faults against the zero page. The read-only
-	 * data is likely to be read-cached on the local CPU and
-	 * local/remote hits to the zero page are not interesting.
-	 */
-	if (prot_numa && is_huge_zero_pmd(*pmd))
-		goto unlock;
+	if (prot_numa) {
+		struct page *page;
+		int prev_lv;
+		int mode = sysctl_numa_balancing_extended_mode;
+		/*
+		 * Avoid trapping faults against the zero page. The read-only
+		 * data is likely to be read-cached on the local CPU and
+		 * local/remote hits to the zero page are not interesting.
+		 */
+		if (is_huge_zero_pmd(*pmd))
+			goto unlock;
 
-	if (prot_numa && pmd_protnone(*pmd))
-		goto unlock;
+		page = pmd_page(*pmd);
 
+		/* Avoid TLB flush if possible */
+		if (pmd_protnone(*pmd)) {
+			if (mode & NUMA_BALANCING_OPM) {
+				/* The page is not accessed in last scan period */
+				prev_lv = mod_page_access_lv(page, 0);
+				add_page_for_tracking(page, prev_lv);
+			}
+			goto unlock;
+		}
+
+		/* The page is accessed in last scan period */
+		if (mode & NUMA_BALANCING_OPM) {
+			prev_lv = mod_page_access_lv(page, 1);
+			add_page_for_tracking(page, prev_lv);
+		}
+	}
 	/*
 	 * In case prot_numa, we are under down_read(mmap_sem). It's critical
 	 * to not clear pmd intermittently to avoid race with MADV_DONTNEED

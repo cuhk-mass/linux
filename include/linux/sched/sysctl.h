@@ -33,10 +33,19 @@ enum sched_tunable_scaling {
 };
 extern enum sched_tunable_scaling sysctl_sched_tunable_scaling;
 
+/* NUMA balancing extended modes */
+#define NUMA_BALANCING_CPM		0x1
+#define NUMA_BALANCING_OPM		0x2
+#define NUMA_BALANCING_EXCHANGE		0x4
+
+extern unsigned int sysctl_numa_balancing_mode;
 extern unsigned int sysctl_numa_balancing_scan_delay;
 extern unsigned int sysctl_numa_balancing_scan_period_min;
 extern unsigned int sysctl_numa_balancing_scan_period_max;
 extern unsigned int sysctl_numa_balancing_scan_size;
+
+/* NUMA balancing extended mode options */
+extern unsigned int sysctl_numa_balancing_extended_mode;
 
 #ifdef CONFIG_SCHED_DEBUG
 extern __read_mostly unsigned int sysctl_sched_migration_cost;
@@ -87,6 +96,10 @@ extern int sysctl_sched_uclamp_handler(struct ctl_table *table, int write,
 #endif
 
 extern int sysctl_numa_balancing(struct ctl_table *table, int write,
+				 void __user *buffer, size_t *lenp,
+				 loff_t *ppos);
+
+extern int sysctl_numa_balancing_extended(struct ctl_table *table, int write,
 				 void __user *buffer, size_t *lenp,
 				 loff_t *ppos);
 

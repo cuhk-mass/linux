@@ -35,6 +35,7 @@
 #include <linux/uio.h>
 #include <linux/hugetlb.h>
 #include <linux/page_idle.h>
+#include <linux/sched/sysctl.h>
 
 #include "internal.h"
 
@@ -281,6 +282,7 @@ static void __activate_page(struct page *page, struct lruvec *lruvec,
 		del_page_from_lru_list(page, lruvec, lru);
 		SetPageActive(page);
 		lru += LRU_ACTIVE;
+
 		add_page_to_lru_list(page, lruvec, lru);
 		trace_mm_lru_activate(page);
 
@@ -790,7 +792,6 @@ void release_pages(struct page **pages, int nr)
 		/* Clear Active bit in case of parallel mark_page_accessed */
 		__ClearPageActive(page);
 		__ClearPageWaiters(page);
-
 		list_add(&page->lru, &pages_to_free);
 	}
 	if (locked_pgdat)

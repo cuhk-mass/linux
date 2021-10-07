@@ -2516,7 +2516,7 @@ static void reset_ptenuma_scan(struct task_struct *p)
 	 * expensive, to avoid any form of compiler optimizations:
 	 */
 	WRITE_ONCE(p->mm->numa_scan_seq, READ_ONCE(p->mm->numa_scan_seq) + 1);
-	p->mm->numa_scan_offset = 0;
+	WRITE_ONCE(p->mm->numa_scan_offset, 0);
 }
 
 /*
@@ -2618,6 +2618,7 @@ void task_numa_work(struct callback_head *work)
 			start = max(start, vma->vm_start);
 			end = ALIGN(start + (pages << PAGE_SHIFT), HPAGE_SIZE);
 			end = min(end, vma->vm_end);
+			WRITE_ONCE(mm->numa_scan_offset, end);
 			nr_pte_updates = change_prot_numa(vma, start, end);
 
 			/*
@@ -2647,9 +2648,7 @@ out:
 	 * would find the !migratable VMA on the next scan but not reset the
 	 * scanner to the start so check it now.
 	 */
-	if (vma)
-		mm->numa_scan_offset = start;
-	else
+	if (!vma)
 		reset_ptenuma_scan(p);
 	up_read(&mm->mmap_sem);
 
