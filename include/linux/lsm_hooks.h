@@ -1716,7 +1716,7 @@ static inline int lsm_task_display(struct task_struct *task)
 }
 
 /* Same as lsm_task_display(), using struct cred as input */
-static inline int lsm_cred_display(struct cred *cred)
+static inline int lsm_cred_display(const struct cred *cred)
 {
 #ifdef CONFIG_SECURITY
 	int *display = cred->security;
