@@ -93,6 +93,17 @@ config VIRTIO_BALLOON
 
 	 If unsure, say M.
 
+config VIRTIO_HBALLOON
+	tristate "Virtio hballoon driver"
+	depends on VIRTIO
+	select MEMORY_BALLOON
+	select PAGE_REPORTING
+	help
+	 This driver supports increasing and decreasing the amount
+	 of memory within a KVM guest.
+
+	 If unsure, say M.
+
 config VIRTIO_MEM
 	tristate "Virtio mem driver"
 	default m
