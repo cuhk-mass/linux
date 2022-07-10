@@ -47,8 +47,8 @@ static struct vfsmount *balloon_mnt;
 #endif
 
 enum virtio_balloon_vq {
-	VIRTIO_BALLOON_VQ_INFLATE,
-	VIRTIO_BALLOON_VQ_DEFLATE,
+	VIRTIO_BALLOON_VQ_SIZE,
+	VIRTIO_BALLOON_VQ_MEDIUM,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
 	VIRTIO_BALLOON_VQ_REPORTING,
@@ -61,7 +61,7 @@ enum virtio_balloon_config_read {
 
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
+	struct virtqueue *size_vq, *medium_vq, *stats_vq, *free_page_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -192,8 +192,13 @@ static int virtballoon_free_page_report(struct page_reporting_dev_info *pr_dev_i
 	return 0;
 }
 
+// the first bit of each pfn is an indicator of whether it is an inflate or deflate
+// inflate is indicated as 0 and deflate is indicated as 1
+// i.e. inflate: set_page_pfns(vb, pfns, page, 0u<<31)
+#define VIRTIO_BALLOON_PFN_FLAG_INFLATE 0
+#define VIRTIO_BALLOON_PFN_FLAG_DEFLATE (1u<<31)
 static void set_page_pfns(struct virtio_balloon *vb,
-			  __virtio32 pfns[], struct page *page)
+			  __virtio32 pfns[], struct page *page, u32 flags)
 {
 	unsigned int i;
 
@@ -205,7 +210,7 @@ static void set_page_pfns(struct virtio_balloon *vb,
 	 */
 	for (i = 0; i < VIRTIO_BALLOON_PAGES_PER_PAGE; i++)
 		pfns[i] = cpu_to_virtio32(vb->vdev,
-					  page_to_balloon_pfn(page) + i);
+					  (page_to_balloon_pfn(page) + i) & (~flags));
 }
 
 static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
@@ -241,7 +246,8 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 	while ((page = balloon_page_pop(&pages))) {
 		balloon_page_enqueue(&vb->vb_dev_info, page);
 
-		set_page_pfns(vb, vb->pfns + vb->num_pfns, page);
+		set_page_pfns(vb, vb->pfns + vb->num_pfns,
+				page, VIRTIO_BALLOON_PFN_FLAG_INFLATE);
 		vb->num_pages += VIRTIO_BALLOON_PAGES_PER_PAGE;
 		if (!virtio_has_feature(vb->vdev,
 					VIRTIO_BALLOON_F_DEFLATE_ON_OOM))
@@ -252,7 +258,7 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 	num_allocated_pages = vb->num_pfns;
 	/* Did we get any? */
 	if (vb->num_pfns != 0)
-		tell_host(vb, vb->inflate_vq);
+		tell_host(vb, vb->size_vq);
 	mutex_unlock(&vb->balloon_lock);
 
 	return num_allocated_pages;
@@ -290,7 +296,8 @@ static unsigned leak_balloon(struct virtio_balloon *vb, size_t num)
 		page = balloon_page_dequeue(vb_dev_info);
 		if (!page)
 			break;
-		set_page_pfns(vb, vb->pfns + vb->num_pfns, page);
+		set_page_pfns(vb, vb->pfns + vb->num_pfns,
+				page, VIRTIO_BALLOON_PFN_FLAG_DEFLATE);
 		list_add(&page->lru, &pages);
 		vb->num_pages -= VIRTIO_BALLOON_PAGES_PER_PAGE;
 	}
@@ -302,7 +309,7 @@ static unsigned leak_balloon(struct virtio_balloon *vb, size_t num)
 	 * is true, we *have* to do it in this order
 	 */
 	if (vb->num_pfns != 0)
-		tell_host(vb, vb->deflate_vq);
+		tell_host(vb, vb->size_vq);
 	release_pages_balloon(vb, &pages);
 	mutex_unlock(&vb->balloon_lock);
 	return num_freed_pages;
@@ -506,10 +513,10 @@ static int init_vqs(struct virtio_balloon *vb)
 	 * will be NULL if the related feature is not enabled, which will
 	 * cause no allocation for the corresponding virtqueue in find_vqs.
 	 */
-	callbacks[VIRTIO_BALLOON_VQ_INFLATE] = balloon_ack;
-	names[VIRTIO_BALLOON_VQ_INFLATE] = "inflate";
-	callbacks[VIRTIO_BALLOON_VQ_DEFLATE] = balloon_ack;
-	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
+	callbacks[VIRTIO_BALLOON_VQ_SIZE] = balloon_ack;
+	names[VIRTIO_BALLOON_VQ_SIZE] = "size";
+	callbacks[VIRTIO_BALLOON_VQ_MEDIUM] = balloon_ack;
+	names[VIRTIO_BALLOON_VQ_MEDIUM] = "medium";
 	callbacks[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
@@ -536,8 +543,8 @@ static int init_vqs(struct virtio_balloon *vb)
 	if (err)
 		return err;
 
-	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
-	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
+	vb->size_vq = vqs[VIRTIO_BALLOON_VQ_SIZE];
+	vb->medium_vq = vqs[VIRTIO_BALLOON_VQ_MEDIUM];
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		struct scatterlist sg;
 		unsigned int num_stats;
@@ -788,16 +795,16 @@ static int virtballoon_migratepage(struct balloon_dev_info *vb_dev_info,
 	__count_vm_event(BALLOON_MIGRATE);
 	spin_unlock_irqrestore(&vb_dev_info->pages_lock, flags);
 	vb->num_pfns = VIRTIO_BALLOON_PAGES_PER_PAGE;
-	set_page_pfns(vb, vb->pfns, newpage);
-	tell_host(vb, vb->inflate_vq);
+	set_page_pfns(vb, vb->pfns, newpage, VIRTIO_BALLOON_PFN_FLAG_INFLATE);
+	tell_host(vb, vb->size_vq);
 
 	/* balloon's page migration 2nd step -- deflate "page" */
 	spin_lock_irqsave(&vb_dev_info->pages_lock, flags);
 	balloon_page_delete(page);
 	spin_unlock_irqrestore(&vb_dev_info->pages_lock, flags);
 	vb->num_pfns = VIRTIO_BALLOON_PAGES_PER_PAGE;
-	set_page_pfns(vb, vb->pfns, page);
-	tell_host(vb, vb->deflate_vq);
+	set_page_pfns(vb, vb->pfns, page, VIRTIO_BALLOON_PFN_FLAG_DEFLATE);
+	tell_host(vb, vb->size_vq);
 
 	mutex_unlock(&vb->balloon_lock);
 
