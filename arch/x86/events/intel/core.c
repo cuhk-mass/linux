@@ -6239,6 +6239,7 @@ __init int intel_pmu_init(void)
 	case INTEL_FAM6_ICELAKE_X:
 	case INTEL_FAM6_ICELAKE_D:
 		x86_pmu.pebs_ept = 1;
+		x86_pmu.pebs_capable = ~0ULL;
 		pmem = true;
 		fallthrough;
 	case INTEL_FAM6_ICELAKE_L:
