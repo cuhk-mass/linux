@@ -101,7 +101,7 @@ static inline void __kvm_perf_overflow(struct kvm_pmc *pmc, bool in_pmi)
 	struct kvm_pmu *pmu = pmc_to_pmu(pmc);
 	bool skip_pmi = false;
 
-	/* Ignore counters that have been reprogrammed already. */
+	/* Ignore counters that have not been reprogrammed. */
 	if (test_and_set_bit(pmc->idx, pmu->reprogram_pmi))
 		return;
 
@@ -293,7 +293,7 @@ out:
 	return allow_event;
 }
 
-void reprogram_counter(struct kvm_pmc *pmc)
+static void __reprogram_counter(struct kvm_pmc *pmc)
 {
 	struct kvm_pmu *pmu = pmc_to_pmu(pmc);
 	u64 eventsel = pmc->eventsel;
@@ -335,7 +335,6 @@ void reprogram_counter(struct kvm_pmc *pmc)
 			      !(eventsel & ARCH_PERFMON_EVENTSEL_OS),
 			      eventsel & ARCH_PERFMON_EVENTSEL_INT);
 }
-EXPORT_SYMBOL_GPL(reprogram_counter);
 
 void kvm_pmu_handle_event(struct kvm_vcpu *vcpu)
 {
@@ -345,11 +344,12 @@ void kvm_pmu_handle_event(struct kvm_vcpu *vcpu)
 	for_each_set_bit(bit, pmu->reprogram_pmi, X86_PMC_IDX_MAX) {
 		struct kvm_pmc *pmc = static_call(kvm_x86_pmu_pmc_idx_to_pmc)(pmu, bit);
 
-		if (unlikely(!pmc || !pmc->perf_event)) {
+		if (unlikely(!pmc)) {
 			clear_bit(bit, pmu->reprogram_pmi);
 			continue;
 		}
-		reprogram_counter(pmc);
+
+		__reprogram_counter(pmc);
 	}
 
 	/*
@@ -527,7 +527,7 @@ static void kvm_pmu_incr_counter(struct kvm_pmc *pmc)
 	prev_count = pmc->counter;
 	pmc->counter = (pmc->counter + 1) & pmc_bitmask(pmc);
 
-	reprogram_counter(pmc);
+	__reprogram_counter(pmc);
 	if (pmc->counter < prev_count)
 		__kvm_perf_overflow(pmc, false);
 }
@@ -542,7 +542,9 @@ static inline bool eventsel_match_perf_hw_id(struct kvm_pmc *pmc,
 static inline bool cpl_is_matched(struct kvm_pmc *pmc)
 {
 	bool select_os, select_user;
-	u64 config = pmc->current_config;
+	u64 config = pmc_is_gp(pmc) ? pmc->eventsel :
+		(u64)fixed_ctrl_field(pmc_to_pmu(pmc)->fixed_ctr_ctrl,
+				      pmc->idx - INTEL_PMC_IDX_FIXED);
 
 	if (pmc_is_gp(pmc)) {
 		select_os = config & ARCH_PERFMON_EVENTSEL_OS;
