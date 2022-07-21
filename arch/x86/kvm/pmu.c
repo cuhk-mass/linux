@@ -350,6 +350,12 @@ void kvm_pmu_handle_event(struct kvm_vcpu *vcpu)
 		}
 
 		__reprogram_counter(pmc);
+
+		if (pmc->stale_counter) {
+			if (pmc->counter < pmc->stale_counter)
+				__kvm_perf_overflow(pmc, false);
+			pmc->stale_counter = 0;
+		}
 	}
 
 	/*
@@ -522,14 +528,9 @@ void kvm_pmu_destroy(struct kvm_vcpu *vcpu)
 
 static void kvm_pmu_incr_counter(struct kvm_pmc *pmc)
 {
-	u64 prev_count;
-
-	prev_count = pmc->counter;
+	pmc->stale_counter = pmc->counter;
 	pmc->counter = (pmc->counter + 1) & pmc_bitmask(pmc);
-
-	__reprogram_counter(pmc);
-	if (pmc->counter < prev_count)
-		__kvm_perf_overflow(pmc, false);
+	reprogram_counter(pmc);
 }
 
 static inline bool eventsel_match_perf_hw_id(struct kvm_pmc *pmc,
