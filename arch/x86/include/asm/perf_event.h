@@ -512,7 +512,7 @@ extern int x86_perf_rdpmc_index(struct perf_event *event);
 
 #ifdef CONFIG_CPU_SUP_INTEL
 extern struct perf_guest_switch_msr *perf_guest_get_msrs(int *nr, void *data);
-extern int x86_perf_get_lbr(struct x86_pmu_lbr *lbr);
+extern void x86_perf_get_lbr(struct x86_pmu_lbr *lbr);
 extern void intel_pt_handle_vmx(int on);
 #endif /* CONFIG_CPU_SUP_INTEL */
 
