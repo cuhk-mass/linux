@@ -3540,6 +3540,9 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 
 		if (!msr_info->host_initiated)
 			return 1;
+		if (vcpu->arch.last_vmentry_cpu != -1 &&
+		    vcpu->arch.perf_capabilities != data)
+			return 1;
 		if (kvm_get_msr_feature(&msr_ent))
 			return 1;
 		if (data & ~msr_ent.data)
