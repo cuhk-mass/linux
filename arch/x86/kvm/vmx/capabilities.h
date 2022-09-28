@@ -3,6 +3,7 @@
 #define __KVM_X86_VMX_CAPS_H
 
 #include <asm/vmx.h>
+#include <linux/printk.h>
 
 #include "../lapic.h"
 #include "../x86.h"
@@ -422,6 +423,8 @@ static inline u64 vmx_get_perf_capabilities(void)
 		if ((perf_cap & PERF_CAP_PEBS_FORMAT) < 4)
 			perf_cap &= ~PERF_CAP_PEBS_BASELINE;
 	}
+
+	pr_info("perf_capabilities %lu", perf_cap);
 
 	return perf_cap;
 }

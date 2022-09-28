@@ -6237,6 +6237,9 @@ __init int intel_pmu_init(void)
 		name = "skylake";
 		break;
 
+	case INTEL_FAM6_ALDERLAKE:
+	case INTEL_FAM6_ALDERLAKE_L:
+	case INTEL_FAM6_ALDERLAKE_N:
 	case INTEL_FAM6_ICELAKE_X:
 	case INTEL_FAM6_ICELAKE_D:
 		x86_pmu.pebs_ept = 1;
@@ -6316,9 +6319,13 @@ __init int intel_pmu_init(void)
 		name = "sapphire_rapids";
 		break;
 
-	case INTEL_FAM6_ALDERLAKE:
-	case INTEL_FAM6_ALDERLAKE_L:
-	case INTEL_FAM6_ALDERLAKE_N:
+	// case INTEL_FAM6_ALDERLAKE:
+	// case INTEL_FAM6_ALDERLAKE_L:
+	// case INTEL_FAM6_ALDERLAKE_N:
+		x86_pmu.pebs_ept = 1;
+		x86_pmu.pebs_capable = ~0ULL;
+		pr_cont("pebs_ept %u pebs_capable %llu ", x86_pmu.pebs_ept, x86_pmu.pebs_capable);
+		fallthrough;
 	case INTEL_FAM6_RAPTORLAKE:
 	case INTEL_FAM6_RAPTORLAKE_P:
 		/*
