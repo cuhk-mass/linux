@@ -3499,6 +3499,11 @@ static int do_write_feat(struct feat_fd *ff, int type,
 	int err;
 	int ret = 0;
 
+	if (type == HEADER_HYBRID_TOPOLOGY) {
+		pr_warning("skipped write of %s\n", feat_ops[type].name);
+		return ret;
+	}
+
 	if (perf_header__has_feat(ff->ph, type)) {
 		if (!feat_ops[type].write)
 			return -1;

@@ -1934,6 +1934,7 @@ void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 
 bool perf_pmu__has_hybrid(void)
 {
+	return false;
 	if (!hybrid_scanned) {
 		hybrid_scanned = true;
 		perf_pmu__scan(NULL);
