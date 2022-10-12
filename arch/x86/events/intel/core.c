@@ -3844,7 +3844,15 @@ static int intel_pmu_hw_config(struct perf_event *event)
 			return -EINVAL;
 
 		if (!(event->attr.freq || (event->attr.wakeup_events && !event->attr.watermark))) {
-			event->hw.flags |= PERF_X86_EVENT_AUTO_RELOAD;
+			/*
+			 * The reloading is not reliable. Sometime when a PMC overflows,
+			 * instead of finding a reset value, we would find the counter is nearly zero.
+			 * In that case, it takes forever to overflow again.
+			 * See: intel_pmu_drain_pebs_icl
+			 *	->intel_pmu_pebs_event_update_no_drain
+			 *	->intel_pmu_save_and_restart_reload
+			 */
+			// event->hw.flags |= PERF_X86_EVENT_AUTO_RELOAD;
 			if (!(event->attr.sample_type &
 			      ~intel_pmu_large_pebs_flags(event))) {
 				event->hw.flags |= PERF_X86_EVENT_LARGE_PEBS;
