@@ -786,8 +786,11 @@ void intel_pmu_cross_mapped_check(struct kvm_pmu *pmu)
 		    !intel_pmc_is_enabled(pmc) || !pmc->perf_event)
 			continue;
 
+		/*
+		 * A negative index indicates the event isn't mapped to a
+		 * physical counter in the host, e.g. due to contention.
+		 */
 		hw_idx = pmc->perf_event->hw.idx;
-		/* make it a little less dependent on perf's exact behavior */
 		if (hw_idx != pmc->idx && hw_idx > -1)
 			pmu->host_cross_mapped_mask |= BIT_ULL(hw_idx);
 	}

@@ -46,9 +46,12 @@ static inline struct kvm_pmc *get_gp_pmc_amd(struct kvm_pmu *pmu, u32 msr,
 	case MSR_F15H_PERF_CTL0 ... MSR_F15H_PERF_CTR5:
 		if (!guest_cpuid_has(vcpu, X86_FEATURE_PERFCTR_CORE))
 			return NULL;
+		/*
+		 * Each PMU counter has a pair of CTL and CTR MSRs. CTLn
+		 * MSRs (accessed via EVNTSEL) are even, CTRn MSRs are odd.
+		 */
 		idx = (unsigned int)((msr - MSR_F15H_PERF_CTL0) / 2);
-		if ((msr == (MSR_F15H_PERF_CTL0 + 2 * idx)) !=
-		    (type == PMU_TYPE_EVNTSEL))
+		if (!(msr & 0x1) != (type == PMU_TYPE_EVNTSEL))
 			return NULL;
 		break;
 	case MSR_K7_EVNTSEL0 ... MSR_K7_EVNTSEL3:
