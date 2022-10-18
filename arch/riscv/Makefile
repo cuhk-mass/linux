@@ -26,6 +26,8 @@ ifeq ($(CONFIG_ARCH_RV64I),y)
 	KBUILD_CFLAGS += -mabi=lp64
 	KBUILD_AFLAGS += -mabi=lp64
 
+	KBUILD_RUSTFLAGS += -Ctarget-cpu=generic-rv64
+
 	KBUILD_LDFLAGS += -melf64lriscv
 else
 	BITS := 32
@@ -33,15 +35,20 @@ else
 
 	KBUILD_CFLAGS += -mabi=ilp32
 	KBUILD_AFLAGS += -mabi=ilp32
+
+	KBUILD_RUSTFLAGS += -Ctarget-cpu=generic-rv32
+
 	KBUILD_LDFLAGS += -melf32lriscv
 endif
 
 ifeq ($(CONFIG_LD_IS_LLD),y)
+ifeq ($(shell test $(CONFIG_LLD_VERSION) -lt 150000; echo $$?),0)
 	KBUILD_CFLAGS += -mno-relax
 	KBUILD_AFLAGS += -mno-relax
 ifndef CONFIG_AS_IS_LLVM
 	KBUILD_CFLAGS += -Wa,-mno-relax
 	KBUILD_AFLAGS += -Wa,-mno-relax
+endif
 endif
 endif
 

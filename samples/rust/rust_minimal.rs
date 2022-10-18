@@ -6,33 +6,30 @@ use kernel::prelude::*;
 
 module! {
     type: RustMinimal,
-    name: b"rust_minimal",
-    author: b"Rust for Linux Contributors",
-    description: b"Rust minimal sample",
-    license: b"GPL",
+    name: "rust_minimal",
+    author: "Rust for Linux Contributors",
+    description: "Rust minimal sample",
+    license: "GPL",
 }
 
 struct RustMinimal {
-    numbers: Vec<i32>,
+    message: String,
 }
 
 impl kernel::Module for RustMinimal {
-    fn init(_module: &'static ThisModule) -> Result<Self> {
+    fn init(_name: &'static CStr, _module: &'static ThisModule) -> Result<Self> {
         pr_info!("Rust minimal sample (init)\n");
         pr_info!("Am I built-in? {}\n", !cfg!(MODULE));
 
-        let mut numbers = Vec::new();
-        numbers.try_push(72)?;
-        numbers.try_push(108)?;
-        numbers.try_push(200)?;
-
-        Ok(RustMinimal { numbers })
+        Ok(RustMinimal {
+            message: "on the heap!".try_to_owned()?,
+        })
     }
 }
 
 impl Drop for RustMinimal {
     fn drop(&mut self) {
-        pr_info!("My numbers are {:?}\n", self.numbers);
+        pr_info!("My message is {}\n", self.message);
         pr_info!("Rust minimal sample (exit)\n");
     }
 }
