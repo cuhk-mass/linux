@@ -18,6 +18,7 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/page_reporting.h>
+#include <asm/timer.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -52,6 +53,11 @@ enum virtio_balloon_vq {
 
 enum virtio_balloon_config_read {
 	VIRTIO_BALLOON_CONFIG_READ_CMD_ID = 0,
+};
+
+struct balloon_tracepoints {
+	u64 size_change_begin, size_change_elapsed;
+	u64 hetero_size_change_begin, hetero_size_change_elapsed;
 };
 
 struct virtio_balloon {
@@ -131,6 +137,7 @@ struct virtio_balloon {
 	struct balloon_dev_info hetero_vb_dev_info;
 	unsigned int num_hetero_pfns;
 	__virtio32 hetero_pfns[VIRTIO_BALLOON_ARRAY_PFNS_MAX];
+	struct balloon_tracepoints tracepoints;
 };
 
 static const struct virtio_device_id id_table[] = {
@@ -612,6 +619,9 @@ static void update_balloon_size_func(struct work_struct *work)
 	if (!diff)
 		return;
 
+	if (!vb->tracepoints.size_change_begin)
+		vb->tracepoints.size_change_begin = native_sched_clock();
+
 	if (diff > 0)
 		diff -= fill_balloon(vb, diff);
 	else
@@ -620,6 +630,14 @@ static void update_balloon_size_func(struct work_struct *work)
 
 	if (diff)
 		queue_work(system_freezable_wq, work);
+	else {
+		vb->tracepoints.size_change_elapsed =
+			native_sched_clock() -
+			vb->tracepoints.size_change_begin;
+		vb->tracepoints.size_change_begin = 0;
+		pr_info("balloon: size change has taken %llu\n",
+			vb->tracepoints.size_change_elapsed);
+	}
 }
 
 static void update_balloon_hetero_size_func(struct work_struct *work)
@@ -634,6 +652,9 @@ static void update_balloon_hetero_size_func(struct work_struct *work)
 	if (!diff)
 		return;
 
+	if (!vb->tracepoints.hetero_size_change_begin)
+		vb->tracepoints.hetero_size_change_begin = native_sched_clock();
+
 	if (diff > 0)
 		diff -= fill_hetero_balloon(vb, diff);
 	else
@@ -642,6 +663,14 @@ static void update_balloon_hetero_size_func(struct work_struct *work)
 
 	if (diff)
 		queue_work(system_freezable_wq, work);
+	else {
+		vb->tracepoints.hetero_size_change_elapsed =
+			native_sched_clock() -
+			vb->tracepoints.hetero_size_change_begin;
+		vb->tracepoints.hetero_size_change_begin = 0;
+		pr_info("balloon: hetero size change has taken %llu\n",
+			vb->tracepoints.hetero_size_change_elapsed);
+	}
 }
 
 static int init_vqs(struct virtio_balloon *vb)
@@ -1170,6 +1199,7 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		// vb->hetero_vb_dev_info.migratepage = virtballoon_migratepage;
 #endif
 	}
+	memset(&vb->tracepoints, 0, sizeof(struct balloon_tracepoints));
 
 	virtio_device_ready(vdev);
 
