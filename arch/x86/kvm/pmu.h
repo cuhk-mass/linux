@@ -178,7 +178,7 @@ static inline void kvm_init_pmu_capability(void)
 		return;
 	}
 
-	kvm_pmu_cap.version = min(kvm_pmu_cap.version, 2);
+	kvm_pmu_cap.version = min(kvm_pmu_cap.version, 5);
 	kvm_pmu_cap.num_counters_fixed = min(kvm_pmu_cap.num_counters_fixed,
 					     KVM_PMC_MAX_FIXED);
 }
