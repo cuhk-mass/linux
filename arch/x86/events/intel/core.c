@@ -2770,8 +2770,13 @@ static void intel_pmu_enable_event(struct perf_event *event)
 	struct hw_perf_event *hwc = &event->hw;
 	int idx = hwc->idx;
 
-	if (unlikely(event->attr.precise_ip))
+	if (unlikely(event->attr.precise_ip)) {
 		intel_pmu_pebs_enable(event);
+		if (unlikely(hwc->extra_reg.reg == MSR_PEBS_LD_LAT_THRESHOLD)) {
+			struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+			cpuc->pebs_load_latency_threshold = hwc->extra_reg.config;
+		}
+	}
 
 	switch (idx) {
 	case 0 ... INTEL_PMC_IDX_FIXED - 1:
@@ -4096,6 +4101,12 @@ static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr, void *data)
 		/* Set hw GLOBAL_CTRL bits for PEBS counter when it runs for guest */
 		arr[global_ctrl].guest |= arr[pebs_enable].guest;
 	}
+
+	arr[(*nr)++] = (struct perf_guest_switch_msr){
+		.msr = MSR_PEBS_LD_LAT_THRESHOLD,
+		.host = (unsigned long)cpuc->pebs_load_latency_threshold,
+		.guest = kvm_pmu->pebs_load_latency_threshold,
+	};
 
 	return arr;
 }

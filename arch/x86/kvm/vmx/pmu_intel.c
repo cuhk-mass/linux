@@ -368,7 +368,7 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		msr_info->data = pmu->pebs_data_cfg;
 		return 0;
 	case MSR_PEBS_LD_LAT_THRESHOLD:
-		msr_info->data = pmu->pebs_ld_lat;
+		msr_info->data = pmu->pebs_load_latency_threshold;
 		return 0;
 	default:
 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0)) ||
@@ -458,9 +458,9 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		}
 		break;
 	case MSR_PEBS_LD_LAT_THRESHOLD:
-		if (pmu->pebs_ld_lat == data)
+		if (pmu->pebs_load_latency_threshold == data)
 			return 0;
-		pmu->pebs_ld_lat = data;
+		pmu->pebs_load_latency_threshold = data;
 		return 0;
 	default:
 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0)) ||
