@@ -1281,6 +1281,10 @@ void intel_pmu_pebs_enable(struct perf_event *event)
 	else if (event->hw.flags & PERF_X86_EVENT_PEBS_ST)
 		cpuc->pebs_enabled |= 1ULL << 63;
 
+	if (hwc->extra_reg.reg == MSR_PEBS_LD_LAT_THRESHOLD &&
+	    hwc->extra_reg.config)
+		cpuc->pebs_load_latency_threshold = hwc->extra_reg.config;
+
 	if (x86_pmu.intel_cap.pebs_baseline) {
 		hwc->config |= ICL_EVENTSEL_ADAPTIVE;
 		if (cpuc->pebs_data_cfg != cpuc->active_pebs_data_cfg) {

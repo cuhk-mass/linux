@@ -205,9 +205,12 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
 		ret = guest_cpuid_has(vcpu, X86_FEATURE_DS);
 		break;
 	case MSR_PEBS_DATA_CFG:
-	// TODO: relax this restriction
 	case MSR_PEBS_LD_LAT_THRESHOLD:
 		perf_capabilities = vcpu_get_perf_capabilities(vcpu);
+		// Load latency facility requires processor supporting enhanced
+		// PEBS record in the PEBS buffer.
+		// Support for this enhanced PEBS record format is indicated by
+		// IA32_PERF_CAPABILITIES[11:8] encoding of 0001B
 		ret = (perf_capabilities & PERF_CAP_PEBS_BASELINE) &&
 			((perf_capabilities & PERF_CAP_PEBS_FORMAT) > 3);
 		break;
@@ -468,8 +471,6 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		}
 		break;
 	case MSR_PEBS_LD_LAT_THRESHOLD:
-		if (pmu->pebs_load_latency_threshold == data)
-			return 0;
 		// pr_info_ratelimited("%s pebs_load_lat 0x%lx->0x%lx", __func__,
 		// 		    pmu->pebs_load_latency_threshold, data);
 		pmu->pebs_load_latency_threshold = data;
