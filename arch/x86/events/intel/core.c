@@ -3887,7 +3887,7 @@ static int intel_pmu_hw_config(struct perf_event *event)
 			 *	->intel_pmu_pebs_event_update_no_drain
 			 *	->intel_pmu_save_and_restart_reload
 			 */
-			// event->hw.flags |= PERF_X86_EVENT_AUTO_RELOAD;
+			event->hw.flags |= PERF_X86_EVENT_AUTO_RELOAD;
 			if (!(event->attr.sample_type &
 			      ~intel_pmu_large_pebs_flags(event))) {
 				event->hw.flags |= PERF_X86_EVENT_LARGE_PEBS;

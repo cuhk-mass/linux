@@ -241,9 +241,10 @@ static bool pmc_resume_counter(struct kvm_pmc *pmc)
 		return false;
 
 	/* recalibrate sample period and check if it's accepted by perf core */
-	if (perf_event_period(pmc->perf_event,
-			      get_sample_period(pmc, pmc->counter)))
-		return false;
+	// We have PERF_X86_EVENT_AUTO_RELOAD, do not modify period
+	// if (perf_event_period(pmc->perf_event,
+	// 		      get_sample_period(pmc, pmc->counter)))
+	// 	return false;
 
 	if (test_bit(pmc->idx, (unsigned long *)&pmc_to_pmu(pmc)->pebs_enable) !=
 	    (!!pmc->perf_event->attr.precise_ip))
