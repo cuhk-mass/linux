@@ -1989,7 +1989,8 @@ __intel_pmu_pebs_event(struct perf_event *event,
 
 	while (count > 1) {
 		setup_sample(event, iregs, at, data, regs);
-		perf_event_output(event, data, regs);
+		// perf_event_output(event, data, regs);
+		READ_ONCE(event->overflow_handler)(event, data, regs);
 		at += cpuc->pebs_record_size;
 		at = get_next_pebs_record_by_bit(at, top, bit);
 		count--;
@@ -2003,7 +2004,8 @@ __intel_pmu_pebs_event(struct perf_event *event,
 		 * last record the same as other PEBS records, and doesn't
 		 * invoke the generic overflow handler.
 		 */
-		perf_event_output(event, data, regs);
+		// perf_event_output(event, data, regs);
+		READ_ONCE(event->overflow_handler)(event, data, regs);
 	} else {
 		/*
 		 * All but the last records are processed.
