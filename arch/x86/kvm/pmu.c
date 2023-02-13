@@ -149,6 +149,10 @@ static void kvm_perf_overflow(struct perf_event *perf_event,
 
 	__kvm_perf_overflow(pmc, true);
 }
+#define PERF_PEBS_MEMINFO_TYPE                                             \
+	(PERF_SAMPLE_ADDR | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR | \
+	 PERF_SAMPLE_WEIGHT_TYPE | PERF_SAMPLE_TRANSACTION |               \
+	 PERF_SAMPLE_DATA_PAGE_SIZE)
 
 static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
 				  u64 config, bool exclude_user,
