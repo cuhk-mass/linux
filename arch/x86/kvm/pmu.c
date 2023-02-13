@@ -199,8 +199,15 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
 			attr.precise_ip = 3;
 	}
 
+	// pr_info("%s ds_area %px pebs_enable %lx mask %lx pebs_data_cfg %lx mask %lx ldlat %lx\n",
+	// 	__func__, pmu->ds_area, pmu->pebs_enable, pmu->pebs_enable_mask,
+	// 	pmu->pebs_data_cfg, pmu->pebs_data_cfg_mask,
+	// 	pmu->pebs_load_latency_threshold);
 	event = perf_event_create_kernel_counter(&attr, -1, current,
 						 kvm_perf_overflow, pmc);
+	// pr_info("%s attr type %x config %lx config1 %lx precise %lx period %lx sample %lx returned %px\n",
+	// 	__func__, attr.type, attr.config, attr.config1, attr.precise_ip,
+	// 	attr.sample_period, attr.sample_type, event);
 	if (IS_ERR(event)) {
 		pr_debug_ratelimited("kvm_pmu: event creation failed %ld for pmc->idx = %d\n",
 			    PTR_ERR(event), pmc->idx);
@@ -229,6 +236,7 @@ static void pmc_pause_counter(struct kvm_pmc *pmc)
 
 static bool pmc_resume_counter(struct kvm_pmc *pmc)
 {
+	// struct perf_event_attr *attr;
 	if (!pmc->perf_event)
 		return false;
 
@@ -240,6 +248,11 @@ static bool pmc_resume_counter(struct kvm_pmc *pmc)
 	if (test_bit(pmc->idx, (unsigned long *)&pmc_to_pmu(pmc)->pebs_enable) !=
 	    (!!pmc->perf_event->attr.precise_ip))
 		return false;
+
+	// attr = &pmc->perf_event->attr;
+	// pr_info("%s attr type %x config %lx config1 %lx precise %lx period %lx sample %lx\n",
+	// 	__func__, attr->type, attr->config, attr->config1,
+	// 	attr->precise_ip, attr->sample_period, attr->sample_type);
 
 	/* reuse perf_event to serve as pmc_reprogram_counter() does*/
 	perf_event_enable(pmc->perf_event);

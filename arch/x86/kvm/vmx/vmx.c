@@ -998,6 +998,7 @@ static void add_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr,
 	}
 	m->host.val[j].index = msr;
 	m->host.val[j].value = host_val;
+	// pr_info("%s added msr %lx", __func__, msr);
 }
 
 static bool update_transition_efer(struct vcpu_vmx *vmx)

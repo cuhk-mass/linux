@@ -1307,6 +1307,11 @@ void intel_pmu_pebs_enable(struct perf_event *event)
 		ds->pebs_event_reset[idx] = 0;
 	}
 
+	pr_info_ratelimited(
+		"%s config %lx pebs_enable %lx pebs_data_cfg %lx flags %x extra_reg %x %lx\n",
+		__func__, hwc->config, cpuc->pebs_enabled, cpuc->pebs_data_cfg,
+		hwc->flags, hwc->extra_reg.reg, hwc->extra_reg.config);
+
 	intel_pmu_pebs_via_pt_enable(event);
 }
 
@@ -2213,6 +2218,8 @@ static void intel_pmu_drain_pebs_icl(struct pt_regs *iregs, struct perf_sample_d
 
 		for_each_set_bit(bit, (unsigned long *)&pebs_status, size)
 			counts[bit]++;
+		// pr_info("%s pebs_record 0x%px size 0x%lx", __func__, at,
+		// 	cpuc->pebs_record_size);
 	}
 
 	for_each_set_bit(bit, (unsigned long *)&mask, size) {

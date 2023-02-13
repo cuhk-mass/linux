@@ -133,8 +133,12 @@ static inline u64 get_sample_period(struct kvm_pmc *pmc, u64 counter_value)
 {
 	u64 sample_period = (-counter_value) & pmc_bitmask(pmc);
 
-	if (!sample_period)
+	if (!sample_period) {
 		sample_period = pmc_bitmask(pmc) + 1;
+		// pr_warn_ratelimited(
+		// 	"%s counter_value 0x%lx sample_period 0x%lx might be invalid",
+		// 	__func__, counter_value, sample_period);
+	}
 	return sample_period;
 }
 

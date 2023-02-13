@@ -2217,6 +2217,12 @@ static void __intel_pmu_enable_all(int added, bool pmi)
 
 		intel_pmu_enable_bts(event->hw.config);
 	}
+
+	// pr_info_ratelimited(
+	// 	"%s cpu %d intel_ctrl 0x%lx guest_mask 0x%lx wrmsr global_ctrl 0x%lx\n",
+	// 	__func__, smp_processor_id(), intel_ctrl,
+	// 	cpuc->intel_ctrl_guest_mask,
+	// 	intel_ctrl & ~cpuc->intel_ctrl_guest_mask);
 }
 
 static void intel_pmu_enable_all(int added)

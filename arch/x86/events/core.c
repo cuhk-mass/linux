@@ -167,6 +167,7 @@ static int x86_pmu_extra_regs(u64 config, struct perf_event *event)
 		return 0;
 
 	for (er = extra_regs; er->msr; er++) {
+		// struct perf_event_attr *attr = &event->attr;
 		if (er->event != (config & er->config_mask))
 			continue;
 		if (event->attr.config1 & ~er->valid_mask)
@@ -178,6 +179,10 @@ static int x86_pmu_extra_regs(u64 config, struct perf_event *event)
 		reg->idx = er->idx;
 		reg->config = event->attr.config1;
 		reg->reg = er->msr;
+		// pr_info("%s attr type %x config %lx config1 %lx precise %lx period %lx sample %lx event %px extra_reg %px msr %x %lx\n",
+		// 	__func__, attr->type, attr->config, attr->config1,
+		// 	attr->precise_ip, attr->sample_period,
+		// 	attr->sample_type, event, reg, reg->reg, reg->config);
 		break;
 	}
 	return 0;
@@ -1406,6 +1411,10 @@ int x86_perf_event_set_period(struct perf_event *event)
 	 * mark it to be able to extra future deltas:
 	 */
 	local64_set(&hwc->prev_count, (u64)-left);
+
+	// if (-10 < left && left < 10)
+	// 	pr_info("%s %ld wrmsr 0x%lx 0x%lx\n", __func__, left,
+	// 		hwc->event_base, (u64)(-left) & x86_pmu.cntval_mask);
 
 	wrmsrl(hwc->event_base, (u64)(-left) & x86_pmu.cntval_mask);
 

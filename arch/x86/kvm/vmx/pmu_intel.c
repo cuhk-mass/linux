@@ -420,6 +420,9 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 0;
 		if (kvm_valid_perf_global_ctrl(pmu, data)) {
 			diff = pmu->global_ctrl ^ data;
+			// pr_info_ratelimited(
+			// 	"%s reprogram_counters global_ctrl 0x%lx->0x%lx diff 0x%lx",
+			// 	__func__, pmu->global_ctrl, data, diff);
 			pmu->global_ctrl = data;
 			reprogram_counters(pmu, diff);
 			return 0;
@@ -437,6 +440,9 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 0;
 		if (!(data & pmu->pebs_enable_mask)) {
 			diff = pmu->pebs_enable ^ data;
+			// pr_info_ratelimited(
+			// 	"%s reprogram_counters pebs_enable 0x%lx->0x%lx diff 0x%lx",
+			// 	__func__, pmu->pebs_enable, data, diff);
 			pmu->pebs_enable = data;
 			reprogram_counters(pmu, diff);
 			return 0;
@@ -447,12 +453,16 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 1;
 		if (is_noncanonical_address(data, vcpu))
 			return 1;
+		// pr_info_ratelimited("%s ds_area 0x%lx->0x%lx", __func__,
+		// 		    pmu->ds_area, data);
 		pmu->ds_area = data;
 		return 0;
 	case MSR_PEBS_DATA_CFG:
 		if (pmu->pebs_data_cfg == data)
 			return 0;
 		if (!(data & pmu->pebs_data_cfg_mask)) {
+			// pr_info_ratelimited("%s pebs_data_cfg 0x%lx->0x%lx",
+			// 		    __func__, pmu->pebs_data_cfg, data);
 			pmu->pebs_data_cfg = data;
 			return 0;
 		}
@@ -460,6 +470,8 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PEBS_LD_LAT_THRESHOLD:
 		if (pmu->pebs_load_latency_threshold == data)
 			return 0;
+		// pr_info_ratelimited("%s pebs_load_lat 0x%lx->0x%lx", __func__,
+		// 		    pmu->pebs_load_latency_threshold, data);
 		pmu->pebs_load_latency_threshold = data;
 		return 0;
 	default:

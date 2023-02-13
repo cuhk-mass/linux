@@ -1153,6 +1153,12 @@ static inline void __x86_pmu_enable_event(struct hw_perf_event *hwc,
 		wrmsrl(x86_pmu_config_addr(hwc->idx + 1), x86_pmu.perf_ctr_pair_en);
 
 	wrmsrl(hwc->config_base, (hwc->config | enable_mask) & ~disable_mask);
+
+	// pr_info_ratelimited(
+	// 	"%s cpu %d counter %d msr 0x%x 0x%lx extra_reg 0x%x 0x%lx\n",
+	// 	__func__, smp_processor_id(), hwc->idx, hwc->config_base,
+	// 	(hwc->config | enable_mask) & ~disable_mask, hwc->extra_reg.reg,
+	// 	hwc->extra_reg.config);
 }
 
 void x86_pmu_enable_all(int added);
